@@ -29,8 +29,6 @@ use near_sdk::{
     PromiseError,
 };
 
-use crate::events::emit_event;
-
 mod admin;
 mod events;
 
@@ -168,15 +166,7 @@ impl Contract {
             "Transfer exceeds the yearly limit"
         );
         record.spent = new_spent;
-        emit_event(
-            "transfer",
-            serde_json::json!({
-                "receiver_id": receiver_id,
-                "amount": amount,
-                "spent": new_spent,
-                "period_index": period_index,
-            }),
-        );
+        events::transfer(&receiver_id, amount, new_spent, period_index);
         Promise::new(receiver_id.clone()).transfer(amount).then(
             Self::ext(env::current_account_id())
                 .with_static_gas(ON_TRANSFER_GAS)
@@ -204,14 +194,7 @@ impl Contract {
                 record.spent = record.spent.saturating_sub(amount);
             }
         }
-        emit_event(
-            "transfer_failed",
-            serde_json::json!({
-                "receiver_id": receiver_id,
-                "amount": amount,
-                "period_index": period_index,
-            }),
-        );
+        events::transfer_failed(&receiver_id, amount, period_index);
     }
 
     pub fn get_spender(&self) -> &AccountId {

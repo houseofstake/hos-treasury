@@ -5,14 +5,12 @@ use near_sdk::{
     PromiseOrValue, env, near, require,
 };
 
-use crate::events::emit_event;
-
 mod events;
 mod owner;
 
-/// Upper bound for the execution delay: 366 days in nanoseconds.
+/// Upper bound for the execution delay: 90 days in nanoseconds.
 /// Protects against a typo in a scheduled `set_delay` bricking the DAO forever.
-pub const MAX_DELAY_NS: u64 = 366 * 24 * 60 * 60 * 1_000_000_000;
+pub const MAX_DELAY_NS: u64 = 90 * 24 * 60 * 60 * 1_000_000_000;
 
 /// Gas reserved for the `on_proposal_added` callback itself, on top of the gas
 /// it attaches to `act_proposal`.
@@ -157,7 +155,7 @@ impl Contract {
             env::attached_deposit() == request.total_deposit(),
             "Attached deposit must equal the total deposit of all actions"
         );
-        self.insert_request("schedule", request)
+        self.insert_request(events::schedule, request)
     }
 
     /// Schedules a Sputnik proposal on the DAO behind this timelock and returns the
@@ -204,7 +202,7 @@ impl Contract {
             execute_after: U64(env::block_timestamp().saturating_add(self.delay_ns)),
             approve: Some(approval),
         };
-        self.insert_request("schedule_proposal", request)
+        self.insert_request(events::schedule_proposal, request)
     }
 
     /// Executes a request whose delay has passed. Callable by anyone: the DAO already
@@ -221,13 +219,7 @@ impl Contract {
             env::block_timestamp() >= request.execute_after.0,
             "The timelock delay has not passed yet"
         );
-        emit_event(
-            "execute",
-            serde_json::json!({
-                "request_id": request_id,
-                "receiver_id": request.receiver_id,
-            }),
-        );
+        events::execute(request_id, &request.receiver_id);
         let total_deposit = request.total_deposit();
         let mut promise = Promise::new(request.receiver_id.clone());
         for action in request.actions {
@@ -272,13 +264,7 @@ impl Contract {
     ) -> PromiseOrValue<()> {
         match result {
             Ok(proposal_id) => {
-                emit_event(
-                    "approve_proposal",
-                    serde_json::json!({
-                        "request_id": request_id,
-                        "proposal_id": proposal_id,
-                    }),
-                );
+                events::approve_proposal(request_id, proposal_id);
                 let kind: serde_json::Value =
                     serde_json::from_str(&kind).expect("Stored proposal kind is not valid JSON");
                 let args = serde_json::json!({
@@ -294,14 +280,7 @@ impl Contract {
                 ))
             }
             Err(_) => {
-                emit_event(
-                    "proposal_failed",
-                    serde_json::json!({
-                        "request_id": request_id,
-                        "funder_id": funder_id,
-                        "refund": bond,
-                    }),
-                );
+                events::proposal_failed(request_id, &funder_id, bond);
                 if bond.is_zero() {
                     PromiseOrValue::Value(())
                 } else {
@@ -323,14 +302,7 @@ impl Contract {
             .requests
             .remove(&request_id)
             .expect("Request not found");
-        emit_event(
-            "cancel",
-            serde_json::json!({
-                "request_id": request_id,
-                "receiver_id": request.receiver_id,
-                "cancelled_by": caller,
-            }),
-        );
+        events::cancel(request_id, &request.receiver_id, &caller);
         let total_deposit = request.total_deposit();
         if !total_deposit.is_zero() {
             Promise::new(request.funder_id).transfer(total_deposit);
@@ -378,18 +350,19 @@ impl Contract {
 }
 
 impl Contract {
-    /// Assigns the next id to the request, emits the schedule event and stores it.
-    fn insert_request(&mut self, event: &str, request: Request) -> u64 {
+    /// Assigns the next id to the request, emits the given schedule event and stores it.
+    fn insert_request(
+        &mut self,
+        emit: fn(u64, &AccountId, U64, NearToken),
+        request: Request,
+    ) -> u64 {
         let request_id = self.next_request_id;
         self.next_request_id += 1;
-        emit_event(
-            event,
-            serde_json::json!({
-                "request_id": request_id,
-                "receiver_id": request.receiver_id,
-                "execute_after": request.execute_after,
-                "total_deposit": request.total_deposit(),
-            }),
+        emit(
+            request_id,
+            &request.receiver_id,
+            request.execute_after,
+            request.total_deposit(),
         );
         self.requests.insert(request_id, request);
         request_id
