@@ -1,0 +1,19 @@
+[package]
+name = "dao-timelock"
+description = "Timelock contract that delays and gates all actions of a Sputnik DAO"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+near-sdk.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+near-sdk = { workspace = true, features = ["unit-testing"] }

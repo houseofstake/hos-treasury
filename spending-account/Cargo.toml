@@ -1,0 +1,19 @@
+[package]
+name = "spending-account"
+description = "Treasury spending account: transfers NEAR only to whitelisted accounts within yearly limits, split between a spender and an admin role"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+near-sdk.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+near-sdk = { workspace = true, features = ["unit-testing"] }
