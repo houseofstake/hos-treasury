@@ -11,8 +11,8 @@ mod request;
 
 pub use request::*;
 
-/// Upper bound for the execution delay (90 days in ns)
-pub const MAX_DELAY_NS: u64 = 90 * 24 * 60 * 60 * 1_000_000_000;
+/// Upper bound for the execution delay (30 days in ns)
+pub const MAX_DELAY_NS: u64 = 30 * 24 * 60 * 60 * 1_000_000_000;
 
 /// Gas reserved for the `on_proposal_added` callback itself.
 pub const GAS_FOR_ON_PROPOSAL_ADDED: Gas = Gas::from_tgas(10);

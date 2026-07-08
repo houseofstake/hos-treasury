@@ -245,6 +245,7 @@ impl TreasuryTestWorkspace {
     }
 }
 
+#[track_caller]
 #[allow(dead_code)]
 pub fn outcome_check(outcome: &near_workspaces::result::ExecutionFinalResult) {
     if outcome.failures().len() > 0 || outcome.is_failure() {
@@ -253,6 +254,7 @@ pub fn outcome_check(outcome: &near_workspaces::result::ExecutionFinalResult) {
     assert!(outcome.failures().len() == 0 && outcome.is_success());
 }
 
+#[track_caller]
 #[allow(dead_code)]
 pub fn assert_almost_eq(left: NearToken, right: NearToken, max_delta: NearToken) {
     let left2 = left.as_yoctonear();

@@ -344,18 +344,6 @@ impl SputnikTimelockWorkspace {
             .await?)
     }
 
-    pub async fn cancel_request(
-        &self,
-        caller: &Account,
-        request_id: u64,
-    ) -> Result<ExecutionFinalResult, Box<dyn std::error::Error>> {
-        Ok(caller
-            .call(self.timelock.id(), "cancel")
-            .args_json(json!({ "request_id": request_id }))
-            .transact()
-            .await?)
-    }
-
     // ---- Sandbox helpers ----
 
     pub async fn balance(
