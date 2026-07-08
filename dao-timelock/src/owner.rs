@@ -1,6 +1,3 @@
-//! Self-only configuration methods: callable only by the timelock account itself, so
-//! every config change must go through a scheduled request and wait out the delay.
-
 use crate::*;
 
 #[near]

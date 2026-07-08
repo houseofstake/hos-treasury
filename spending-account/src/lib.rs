@@ -227,8 +227,8 @@ impl Contract {
         limit: Option<u32>,
     ) -> Vec<WhitelistEntry> {
         let period_index = self.current_period_index();
-        let from_index = from_index.unwrap_or(0) as usize;
-        let limit = limit.unwrap_or(u32::MAX) as usize;
+        let from_index = usize::try_from(from_index.unwrap_or(0)).expect("from_index exceeds usize");
+        let limit = usize::try_from(limit.unwrap_or(u32::MAX)).expect("limit exceeds usize");
         self.whitelist
             .iter()
             .skip(from_index)

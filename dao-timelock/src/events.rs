@@ -1,10 +1,5 @@
-//! `EVENT_JSON` log emission for all state changes.
-//!
-//! Each state change has its own named function here; call sites emit through
-//! them rather than constructing event names and JSON payloads inline.
-
 use near_sdk::json_types::U64;
-use near_sdk::{env, AccountId, NearToken};
+use near_sdk::{AccountId, NearToken, env};
 
 const EVENT_STANDARD: &str = "dao-timelock";
 const EVENT_VERSION: &str = "1.0.0";
@@ -21,45 +16,21 @@ fn emit_event(event: &str, data: serde_json::Value) {
     ));
 }
 
-pub(crate) fn schedule(
-    request_id: u64,
-    receiver_id: &AccountId,
-    execute_after: U64,
-    total_deposit: NearToken,
-) {
-    emit_scheduled("schedule", request_id, receiver_id, execute_after, total_deposit);
+pub(crate) fn schedule(request_id: u64, execute_after: U64) {
+    emit_scheduled("schedule", request_id, execute_after);
 }
 
-pub(crate) fn schedule_proposal(
-    request_id: u64,
-    receiver_id: &AccountId,
-    execute_after: U64,
-    total_deposit: NearToken,
-) {
-    emit_scheduled(
-        "schedule_proposal",
-        request_id,
-        receiver_id,
-        execute_after,
-        total_deposit,
-    );
+pub(crate) fn schedule_proposal(request_id: u64, execute_after: U64) {
+    emit_scheduled("schedule_proposal", request_id, execute_after);
 }
 
 /// Shared payload for the two request-scheduling events.
-fn emit_scheduled(
-    event: &str,
-    request_id: u64,
-    receiver_id: &AccountId,
-    execute_after: U64,
-    total_deposit: NearToken,
-) {
+fn emit_scheduled(event: &str, request_id: u64, execute_after: U64) {
     emit_event(
         event,
         serde_json::json!({
             "request_id": request_id,
-            "receiver_id": receiver_id,
             "execute_after": execute_after,
-            "total_deposit": total_deposit,
         }),
     );
 }

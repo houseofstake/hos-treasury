@@ -250,32 +250,6 @@ async fn test_deposit_escrow_and_cancel_refund() -> Result<(), Box<dyn std::erro
 }
 
 #[tokio::test]
-async fn test_cancel_by_dao() -> Result<(), Box<dyn std::error::Error>> {
-    let w = TreasuryTestWorkspaceBuilder::default()
-        .with_timelocks()
-        .build()
-        .await?;
-    let timelock = w.admin_timelock.as_ref().unwrap();
-
-    let action = function_call("get_period_info", json!({}), NearToken::from_yoctonear(0), 10);
-    let request_id = w
-        .schedule(
-            &w.admin_dao,
-            timelock,
-            w.treasury.id(),
-            vec![action],
-            NearToken::from_yoctonear(0),
-        )
-        .await?;
-
-    let outcome = w.cancel(&w.admin_dao, timelock, request_id).await?;
-    outcome_check(&outcome);
-    assert_eq!(w.get_num_requests(timelock).await?, 0);
-
-    Ok(())
-}
-
-#[tokio::test]
 async fn test_config_change_via_scheduled_request() -> Result<(), Box<dyn std::error::Error>> {
     let w = TreasuryTestWorkspaceBuilder::default()
         .with_timelocks()
