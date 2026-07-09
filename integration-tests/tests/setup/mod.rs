@@ -1,3 +1,4 @@
+pub mod ft_helpers;
 pub mod sputnik_helpers;
 pub mod timelock_helpers;
 pub mod treasury_helpers;
@@ -13,9 +14,6 @@ use serde_json::json;
 pub const NS_IN_SECOND: u64 = 1_000_000_000;
 #[allow(dead_code)]
 pub const TIMELOCK_DELAY_SECONDS: u64 = 60;
-/// Length of one spending period: 365 days in nanoseconds (must match the contract).
-#[allow(dead_code)]
-pub const PERIOD_NS: u64 = 365 * 24 * 60 * 60 * NS_IN_SECOND;
 
 pub const TIMELOCK_WASM_FILEPATH: &str = "../res/local/dao_timelock.wasm";
 pub const SPENDING_ACCOUNT_WASM_FILEPATH: &str = "../res/local/spending_account.wasm";
@@ -49,9 +47,6 @@ pub struct TreasuryTestWorkspace {
 pub struct TreasuryTestWorkspaceBuilder {
     pub delay_ns: u64,
     pub deploy_timelocks: bool,
-    /// If set, `first_period_start` is set this many nanoseconds in the past,
-    /// so tests can position the current block close to a period boundary.
-    pub first_period_started_ago_ns: Option<u64>,
     pub treasury_funding: NearToken,
 }
 
@@ -60,7 +55,6 @@ impl Default for TreasuryTestWorkspaceBuilder {
         Self {
             delay_ns: TIMELOCK_DELAY_SECONDS * NS_IN_SECOND,
             deploy_timelocks: false,
-            first_period_started_ago_ns: None,
             treasury_funding: NearToken::from_near(1000),
         }
     }
@@ -110,14 +104,6 @@ impl TreasuryTestWorkspaceBuilder {
             (None, None)
         };
 
-        let first_period_start = match self.first_period_started_ago_ns {
-            Some(ago_ns) => {
-                let block = sandbox.view_block().await?;
-                Some(U64(block.timestamp().saturating_sub(ago_ns)))
-            }
-            None => None,
-        };
-
         let admin_id = admin_timelock.as_ref().unwrap_or(&admin_dao).id();
         let spender_id = spender_timelock.as_ref().unwrap_or(&spender_dao).id();
 
@@ -130,7 +116,6 @@ impl TreasuryTestWorkspaceBuilder {
                     .args_json(json!({
                         "admin_id": admin_id,
                         "spender_id": spender_id,
-                        "first_period_start": first_period_start,
                     }))
                     .gas(near_sdk::Gas::from_tgas(10)),
             )
@@ -186,11 +171,6 @@ impl TreasuryTestWorkspaceBuilder {
 
     pub fn delay_ns(mut self, delay_ns: u64) -> Self {
         self.delay_ns = delay_ns;
-        self
-    }
-
-    pub fn first_period_started_ago_ns(mut self, ago_ns: u64) -> Self {
-        self.first_period_started_ago_ns = Some(ago_ns);
         self
     }
 

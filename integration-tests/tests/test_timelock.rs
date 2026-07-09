@@ -6,6 +6,7 @@ use crate::setup::{
     outcome_check,
 };
 use near_sdk::NearToken;
+use near_sdk::json_types::U128;
 use serde_json::json;
 
 #[tokio::test]
@@ -54,7 +55,8 @@ async fn test_schedule_and_execute_after_delay() -> Result<(), Box<dyn std::erro
         "add_to_whitelist",
         json!({
             "account_id": alice.id(),
-            "yearly_limit": NearToken::from_near(10),
+            "token_id": null,
+            "limit": U128(NearToken::from_near(10).as_yoctonear()),
         }),
         NearToken::from_yoctonear(0),
         30,
@@ -127,7 +129,12 @@ async fn test_only_dao_can_schedule() -> Result<(), Box<dyn std::error::Error>> 
         .await?;
     let timelock = w.admin_timelock.as_ref().unwrap();
 
-    let action = function_call("get_period_info", json!({}), NearToken::from_yoctonear(0), 10);
+    let action = function_call(
+        "get_num_whitelisted",
+        json!({}),
+        NearToken::from_yoctonear(0),
+        10,
+    );
 
     // Neither a guardian nor the other DAO can schedule.
     for account in [&w.guardian, &w.spender_dao] {
@@ -310,7 +317,12 @@ async fn test_config_change_via_scheduled_request() -> Result<(), Box<dyn std::e
     assert_eq!(guardians, vec![new_guardian.id().to_string()]);
 
     // The old guardian lost the ability to cancel.
-    let action = function_call("get_period_info", json!({}), NearToken::from_yoctonear(0), 10);
+    let action = function_call(
+        "get_num_whitelisted",
+        json!({}),
+        NearToken::from_yoctonear(0),
+        10,
+    );
     let request_id = w
         .schedule(
             &w.admin_dao,

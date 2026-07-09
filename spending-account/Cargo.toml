@@ -1,6 +1,6 @@
 [package]
 name = "spending-account"
-description = "Treasury spending account: transfers NEAR only to whitelisted accounts within yearly limits, split between a spender and an admin role"
+description = "Treasury spending account: transfers NEAR and NEP-141 tokens only to whitelisted accounts within spending limits, split between a spender and an admin role"
 version.workspace = true
 authors.workspace = true
 edition.workspace = true

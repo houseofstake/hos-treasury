@@ -6,6 +6,7 @@ mod setup;
 use crate::setup::timelock_helpers::function_call;
 use crate::setup::{TreasuryTestWorkspaceBuilder, outcome_check};
 use near_sdk::NearToken;
+use near_sdk::json_types::U128;
 use serde_json::json;
 
 #[tokio::test]
@@ -40,7 +41,11 @@ async fn test_dao_to_treasury_flow() -> Result<(), Box<dyn std::error::Error>> {
             admin_timelock,
             w.treasury.id(),
             "add_to_whitelist",
-            json!({ "account_id": alice.id(), "yearly_limit": limit }),
+            json!({
+                "account_id": alice.id(),
+                "token_id": null,
+                "limit": U128(limit.as_yoctonear()),
+            }),
             NearToken::from_yoctonear(0),
             30,
         )
@@ -69,9 +74,10 @@ async fn test_dao_to_treasury_flow() -> Result<(), Box<dyn std::error::Error>> {
         alice_before.as_yoctonear() + amount.as_yoctonear(),
         "The receiver should get the exact amount"
     );
-    let (spent, available) = w.spent_and_available(alice.id()).await?;
-    assert_eq!(spent, amount);
-    assert_eq!(available, limit.saturating_sub(amount));
+    assert_eq!(
+        w.remaining_limit(alice.id()).await?,
+        limit.saturating_sub(amount)
+    );
 
     Ok(())
 }
@@ -95,7 +101,11 @@ async fn test_role_separation_between_timelocks() -> Result<(), Box<dyn std::err
             spender_timelock,
             w.treasury.id(),
             "add_to_whitelist",
-            json!({ "account_id": alice.id(), "yearly_limit": limit }),
+            json!({
+                "account_id": alice.id(),
+                "token_id": null,
+                "limit": U128(limit.as_yoctonear()),
+            }),
             NearToken::from_yoctonear(0),
             30,
         )
@@ -143,7 +153,11 @@ async fn test_guardian_cancels_malicious_transfer() -> Result<(), Box<dyn std::e
             admin_timelock,
             w.treasury.id(),
             "add_to_whitelist",
-            json!({ "account_id": alice.id(), "yearly_limit": limit }),
+            json!({
+                "account_id": alice.id(),
+                "token_id": null,
+                "limit": U128(limit.as_yoctonear()),
+            }),
             NearToken::from_yoctonear(0),
             30,
         )
@@ -185,9 +199,7 @@ async fn test_guardian_cancels_malicious_transfer() -> Result<(), Box<dyn std::e
         alice_before.as_yoctonear(),
         "No funds should have moved"
     );
-    let (spent, available) = w.spent_and_available(alice.id()).await?;
-    assert_eq!(spent, NearToken::from_yoctonear(0));
-    assert_eq!(available, limit);
+    assert_eq!(w.remaining_limit(alice.id()).await?, limit);
 
     Ok(())
 }

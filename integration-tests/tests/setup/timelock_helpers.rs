@@ -129,7 +129,8 @@ impl TreasuryTestWorkspace {
         let request_id = self
             .schedule(dao, timelock, receiver_id, vec![action], deposit)
             .await?;
-        self.fast_forward_to_executable(timelock, request_id).await?;
+        self.fast_forward_to_executable(timelock, request_id)
+            .await?;
         self.execute(dao, timelock, request_id).await
     }
 

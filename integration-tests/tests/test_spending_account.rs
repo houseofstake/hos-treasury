@@ -1,8 +1,6 @@
 mod setup;
 
-use crate::setup::{
-    NS_IN_SECOND, PERIOD_NS, TreasuryTestWorkspaceBuilder, assert_almost_eq, outcome_check,
-};
+use crate::setup::{TreasuryTestWorkspaceBuilder, assert_almost_eq, outcome_check};
 use near_sdk::NearToken;
 use near_workspaces::AccountId;
 use serde_json::json;
@@ -17,16 +15,6 @@ async fn test_init_and_views() -> Result<(), Box<dyn std::error::Error>> {
     assert!(!w.is_whitelisted(alice.id()).await?);
     assert!(w.whitelist_entry(alice.id()).await?.is_null());
 
-    let period = w.period_info().await?;
-    assert_eq!(period["period_index"].as_u64().unwrap(), 0);
-    assert_eq!(
-        period["period_duration_ns"].as_str().unwrap(),
-        PERIOD_NS.to_string()
-    );
-    let first_period_start: u64 = period["first_period_start"].as_str().unwrap().parse()?;
-    let period_end: u64 = period["period_end"].as_str().unwrap().parse()?;
-    assert_eq!(period_end, first_period_start + PERIOD_NS);
-
     Ok(())
 }
 
@@ -40,9 +28,7 @@ async fn test_whitelist_and_transfer() -> Result<(), Box<dyn std::error::Error>>
     outcome_check(&outcome);
     assert!(w.is_whitelisted(alice.id()).await?);
     assert_eq!(w.get_num_whitelisted().await?, 1);
-    let (spent, available) = w.spent_and_available(alice.id()).await?;
-    assert_eq!(spent, NearToken::from_yoctonear(0));
-    assert_eq!(available, limit);
+    assert_eq!(w.remaining_limit(alice.id()).await?, limit);
 
     // The spender transfers within the limit; the receiver gets the exact amount.
     let amount = NearToken::from_near(4);
@@ -63,16 +49,16 @@ async fn test_whitelist_and_transfer() -> Result<(), Box<dyn std::error::Error>>
         NearToken::from_millinear(10),
     );
 
-    let (spent, available) = w.spent_and_available(alice.id()).await?;
-    assert_eq!(spent, amount);
-    assert_eq!(available, limit.saturating_sub(amount));
+    let remaining = w.remaining_limit(alice.id()).await?;
+    assert_eq!(remaining, limit.saturating_sub(amount));
 
     // Spending the exact remaining allowance is allowed.
-    let outcome = w.transfer(&w.spender_dao, alice.id(), available).await?;
+    let outcome = w.transfer(&w.spender_dao, alice.id(), remaining).await?;
     outcome_check(&outcome);
-    let (spent, available) = w.spent_and_available(alice.id()).await?;
-    assert_eq!(spent, limit);
-    assert_eq!(available, NearToken::from_yoctonear(0));
+    assert_eq!(
+        w.remaining_limit(alice.id()).await?,
+        NearToken::from_yoctonear(0)
+    );
 
     // The allowance is exhausted.
     let outcome = w
@@ -96,7 +82,9 @@ async fn test_transfer_restrictions() -> Result<(), Box<dyn std::error::Error>> 
 
     // Only the spender can transfer, not the admin or the receiver.
     for account in [&w.admin_dao, &alice] {
-        let outcome = w.transfer(account, alice.id(), NearToken::from_near(1)).await?;
+        let outcome = w
+            .transfer(account, alice.id(), NearToken::from_near(1))
+            .await?;
         assert!(
             outcome.is_failure(),
             "Transfer by non-spender should fail: {:#?}",
@@ -129,10 +117,9 @@ async fn test_transfer_restrictions() -> Result<(), Box<dyn std::error::Error>> 
         .await?;
     assert!(outcome.is_failure(), "Transfer over the limit should fail");
 
-    let (spent, _) = w.spent_and_available(alice.id()).await?;
     assert_eq!(
-        spent,
-        NearToken::from_yoctonear(0),
+        w.remaining_limit(alice.id()).await?,
+        limit,
         "Failed transfers should not consume the allowance"
     );
 
@@ -168,18 +155,19 @@ async fn test_admin_management() -> Result<(), Box<dyn std::error::Error>> {
         "Whitelisting the treasury itself should fail"
     );
 
-    // Lowering the limit below the spent amount leaves zero available.
+    // `set_limit` overrides the remaining allowance.
     outcome_check(
         &w.transfer(&w.spender_dao, alice.id(), NearToken::from_near(4))
             .await?,
     );
     outcome_check(
-        &w.set_yearly_limit(&w.admin_dao, alice.id(), NearToken::from_near(3))
+        &w.set_limit(&w.admin_dao, alice.id(), NearToken::from_near(3))
             .await?,
     );
-    let (spent, available) = w.spent_and_available(alice.id()).await?;
-    assert_eq!(spent, NearToken::from_near(4));
-    assert_eq!(available, NearToken::from_yoctonear(0));
+    assert_eq!(
+        w.remaining_limit(alice.id()).await?,
+        NearToken::from_near(3)
+    );
 
     // Removal revokes the allowance entirely.
     outcome_check(&w.remove_from_whitelist(&w.admin_dao, alice.id()).await?);
@@ -214,7 +202,10 @@ async fn test_role_rotation() -> Result<(), Box<dyn std::error::Error>> {
         .args_json(json!({ "spender_id": new_spender.id() }))
         .transact()
         .await?;
-    assert!(outcome.is_failure(), "Role rotation by non-admin should fail");
+    assert!(
+        outcome.is_failure(),
+        "Role rotation by non-admin should fail"
+    );
 
     let outcome = w
         .admin_dao
@@ -259,7 +250,7 @@ async fn test_role_rotation() -> Result<(), Box<dyn std::error::Error>> {
 async fn test_failed_transfer_rolls_back_allowance() -> Result<(), Box<dyn std::error::Error>> {
     let w = TreasuryTestWorkspaceBuilder::default().build().await?;
     // A whitelisted account that does not exist on chain: the NEAR transfer
-    // receipt fails and the refund callback must roll back the spent counter.
+    // receipt fails and the refund callback must restore the limit.
     let ghost = AccountId::from_str("ghost.test.near").unwrap();
     let limit = NearToken::from_near(10);
     outcome_check(&w.add_to_whitelist(&w.admin_dao, &ghost, limit).await?);
@@ -281,9 +272,7 @@ async fn test_failed_transfer_rolls_back_allowance() -> Result<(), Box<dyn std::
     );
 
     // The allowance is restored and the funds stayed in the treasury.
-    let (spent, available) = w.spent_and_available(&ghost).await?;
-    assert_eq!(spent, NearToken::from_yoctonear(0));
-    assert_eq!(available, limit);
+    assert_eq!(w.remaining_limit(&ghost).await?, limit);
     assert_almost_eq(
         w.balance(&w.treasury).await?,
         treasury_before,
@@ -294,39 +283,37 @@ async fn test_failed_transfer_rolls_back_allowance() -> Result<(), Box<dyn std::
 }
 
 #[tokio::test]
-async fn test_period_rollover_resets_allowance() -> Result<(), Box<dyn std::error::Error>> {
-    // Anchor period 0 in the past so its boundary is ~2 minutes away.
-    let boundary_in_seconds = 120;
-    let w = TreasuryTestWorkspaceBuilder::default()
-        .first_period_started_ago_ns(PERIOD_NS - boundary_in_seconds * NS_IN_SECOND)
-        .build()
-        .await?;
+async fn test_limit_does_not_expire() -> Result<(), Box<dyn std::error::Error>> {
+    let w = TreasuryTestWorkspaceBuilder::default().build().await?;
     let alice = w.sandbox.dev_create_account().await?;
     let limit = NearToken::from_near(10);
     outcome_check(&w.add_to_whitelist(&w.admin_dao, alice.id(), limit).await?);
 
-    assert_eq!(w.period_index().await?, 0);
-
-    // Exhaust the allowance for period 0.
+    // Exhaust the allowance.
     outcome_check(&w.transfer(&w.spender_dao, alice.id(), limit).await?);
     let outcome = w
         .transfer(&w.spender_dao, alice.id(), NearToken::from_yoctonear(1))
         .await?;
     assert!(outcome.is_failure(), "The allowance should be exhausted");
 
-    // Cross the period boundary: the full limit is available again.
-    let period = w.period_info().await?;
-    let period_end: u64 = period["period_end"].as_str().unwrap().parse()?;
-    w.fast_forward(period_end, boundary_in_seconds, 20).await?;
+    // The allowance never resets; only a raised limit extends it.
+    outcome_check(
+        &w.set_limit(&w.admin_dao, alice.id(), NearToken::from_near(5))
+            .await?,
+    );
+    assert_eq!(
+        w.remaining_limit(alice.id()).await?,
+        NearToken::from_near(5)
+    );
 
-    assert_eq!(w.period_index().await?, 1);
-    let (spent, available) = w.spent_and_available(alice.id()).await?;
-    assert_eq!(spent, NearToken::from_yoctonear(0));
-    assert_eq!(available, limit);
-
-    outcome_check(&w.transfer(&w.spender_dao, alice.id(), limit).await?);
-    let (spent, _) = w.spent_and_available(alice.id()).await?;
-    assert_eq!(spent, limit);
+    outcome_check(
+        &w.transfer(&w.spender_dao, alice.id(), NearToken::from_near(5))
+            .await?,
+    );
+    assert_eq!(
+        w.remaining_limit(alice.id()).await?,
+        NearToken::from_yoctonear(0)
+    );
 
     Ok(())
 }

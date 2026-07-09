@@ -7,13 +7,13 @@ delay with a veto window to every action.
 It contains the following contracts:
 
 - **dao-timelock**: A timelock in front of a Sputnik DAO. The DAO schedules requests (batches of function calls) that
-  can only be executed after a configurable delay. During the delay, a set of guardian accounts (or the DAO itself)
-  can cancel a request. It also supports scheduling a Sputnik proposal on the DAO it fronts: on execution it calls
+  can only be executed after a configurable delay. During the delay, a set of guardian accounts can cancel a request. It also supports scheduling a Sputnik proposal on the DAO it fronts: on execution it calls
   `add_proposal` and auto-approves the returned proposal id in a callback.
-- **spending-account**: A treasury account that pays out NEAR only to whitelisted recipients, each capped by a yearly
-  spending limit. Control is split between a **spender** (can only transfer to whitelisted accounts within their
-  remaining allowance) and an **admin** (manages the whitelist, limits and role assignments, but cannot transfer
-  funds). Both roles are expected to be Sputnik DAOs acting through their own `dao-timelock`.
+- **spending-account**: A treasury account that pays out NEAR and NEP-141 tokens only to whitelisted recipients, each
+  capped by a spending limit (token limits are set per recipient-token pair). Control is split between a
+  **spender** (can only transfer to whitelisted accounts within their remaining allowance) and an **admin** (manages
+  the whitelist, limits and role assignments, but cannot transfer funds). Both roles are expected to be Sputnik DAOs
+  acting through their own `dao-timelock`.
 
 ## Architecture
 
@@ -29,11 +29,11 @@ The intended deployment wires the contracts together like this:
   **Execution Timelock SWF**; the **Payment DAO** pays recipients from the SSA through the
   **Execution Timelock SSA**.
 - The **Policy DAO**, acting through the **Policy Timelock**, is the admin of both spending accounts: it manages the
-  whitelists and spending limits, the governance account assignments, and the guardians and delay of every timelock —
+  whitelist and spending limits, the governance account assignments, and the guardians and delay of every timelock —
   including its own.
 
 Every fund movement therefore requires: a DAO vote, the timelock delay (during which guardians can cancel), and a
-recipient that is already whitelisted with enough remaining yearly allowance. Raising a limit or whitelisting a new
+recipient that is already whitelisted with enough remaining allowance. Raising a limit or whitelisting a new
 recipient goes through the same DAO-vote-plus-delay process on the policy side.
 
 ## Design principles
@@ -54,14 +54,18 @@ All contracts are designed to be deployed without access keys, to make sure the 
   - Action deposits are escrowed at schedule time: the attached deposit must equal the sum of the action deposits, and
     it is either attached on execution or refunded on cancellation.
 - **spending-account**
-  - The spender can do exactly one thing: transfer NEAR to an already-whitelisted account within its remaining yearly
-    allowance. It cannot touch the whitelist or the limits.
-  - The admin manages the whitelist, the yearly limits and the spender/admin role assignments, but cannot transfer
+  - The spender can do exactly one thing: transfer NEAR (or a NEP-141 token) to an already-whitelisted account within
+    its remaining allowance. It cannot touch the whitelist or the limits.
+  - Token transfers are whitelisted per (recipient, token) pair, each with its own limit in the token's
+    smallest unit; being whitelisted for NEAR grants no token allowance and vice versa. The recipient must be
+    registered with the token contract (NEP-145 storage deposit) — the contract does not pay storage deposits.
+  - The admin manages the whitelist, the limits and the spender/admin role assignments, but cannot transfer
     funds directly.
-  - Yearly limits are enforced over fixed 365-day periods anchored at `first_period_start` (set at init, e.g. to a
-    calendar year boundary). Each recipient's spent amount lazily resets at the start of every period.
+  - A recipient's limit is its remaining allowance: transfers decrease it and it does not expire or reset. To grant
+    a new allowance, the admin raises the recipient's limit.
   - The allowance is consumed before the transfer is sent; if the transfer fails (e.g. the receiver account was
-    deleted), a callback rolls back the spent counter so failed transfers do not consume the allowance.
+    deleted, or is not registered with the token), a callback restores the limit so failed transfers do not
+    consume the allowance.
   - The contract is intentionally NOT upgradable: there is no method to deploy code or migrate state.
 
 ### Events
@@ -96,8 +100,9 @@ To test all the contracts locally, run the following command (note, it will buil
 ```
 
 This runs both the unit tests in each contract crate and the `near-workspaces` sandbox tests in
-[`integration-tests/`](integration-tests/), which cover the timelock, the spending account, and the full end-to-end
-flow through a real Sputnik DAO (`res/sputnikdao2.wasm`).
+[`integration-tests/`](integration-tests/), which cover the timelock, the spending account (including NEP-141 token
+transfers against a real token contract, `res/w_near.wasm`), and the full end-to-end flow through a real Sputnik DAO
+(`res/sputnikdao2.wasm`).
 
 ### Building a release
 
