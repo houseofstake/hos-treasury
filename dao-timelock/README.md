@@ -2,11 +2,12 @@
 
 A timelock contract that sits between a [Sputnik DAO](https://github.com/near-daos/sputnik-dao-contract) and every action it takes. Instead of executing actions directly, the DAO schedules them here; they become executable only after a configured delay, and during that delay any guardian can cancel them.
 
-## Design
+## Features
 
 - **Only the DAO can schedule.** A request is a batch of function calls (method, base64 args, deposit, gas) to a single receiver, executed atomically on that receiver.
 - **Anyone can execute** a request once its delay has passed — it was already approved by the DAO and survived the guardian review window. A request is removed from state before the promise is created, so it can never execute twice.
-- **Any guardian (or the DAO) can cancel** a pending request. The escrowed deposit is refunded to the funder.
+- **Optional ordering between requests.** A request may name a pending request as its `predecessor_id`; it then becomes executable only once the predecessor has been executed or cancelled. NEAR processes receipts to the same receiver in dispatch order, so at a shared receiver the predecessor's batch runs before the dependent one (use this for e.g. upgrade-then-migrate). Caveats: the predecessor's *success* is not checked; ordering across different receivers is dispatch-order only; a proposal-request predecessor is only ordered up to its `add_proposal` dispatch (the approving vote and the proposal's own effects fire later, from callbacks); cancelling a predecessor unblocks its dependents, so guardians should review those too.
+- **Any guardian can cancel** a pending request. The escrowed deposit is refunded to the funder.
 - **Config changes go through the timelock too.** `set_dao`, `set_guardians`, and `set_delay` are only callable by the timelock account itself, so the DAO must schedule them as requests targeting the timelock and wait out the same delay. Guardians can cancel these like any other request — including an attempt to remove the guardians.
 - **Not upgradable by design.** There is no method to deploy new code or migrate state. To move to a new timelock, the DAO points its own workflows at a new contract; to move to a new DAO, the current DAO schedules `set_dao`.
 
@@ -43,9 +44,12 @@ Same as above with `receiver_id = <dao account>` and an action calling the DAO's
 new(dao_id: AccountId, guardians: Vec<AccountId>, delay_ns: U64)
 
 // State-changing
-#[payable] schedule(receiver_id: AccountId, actions: Vec<FunctionCall>) -> u64  // DAO only
+#[payable] schedule(receiver_id: AccountId, actions: Vec<FunctionCall>,
+                    predecessor_id: Option<u64>) -> u64                         // DAO only
+#[payable] schedule_proposal(description: String, kind: Value, add_proposal_gas: Gas,
+                             act_proposal_gas: Gas, predecessor_id: Option<u64>) -> u64  // DAO only
 execute(request_id: u64) -> Promise                                            // anyone, after delay
-cancel(request_id: u64)                                                        // guardian or DAO
+cancel(request_id: u64)                                                        // guardian
 
 // Self-only (must be scheduled through the timelock)
 set_dao(dao_id: AccountId)

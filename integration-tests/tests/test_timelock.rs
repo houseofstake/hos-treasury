@@ -1,12 +1,11 @@
 mod setup;
 
-use crate::setup::timelock_helpers::function_call;
+use crate::setup::timelock_helpers::{add_to_whitelist_action, function_call};
 use crate::setup::{
     NS_IN_SECOND, TIMELOCK_DELAY_SECONDS, TreasuryTestWorkspaceBuilder, assert_almost_eq,
     outcome_check,
 };
 use near_sdk::NearToken;
-use near_sdk::json_types::U128;
 use serde_json::json;
 
 #[tokio::test]
@@ -53,11 +52,7 @@ async fn test_schedule_and_execute_after_delay() -> Result<(), Box<dyn std::erro
 
     let action = function_call(
         "add_to_whitelist",
-        json!({
-            "account_id": alice.id(),
-            "token_id": null,
-            "limit": U128(NearToken::from_near(10).as_yoctonear()),
-        }),
+        add_to_whitelist_action(alice.id(), NearToken::from_near(10)),
         NearToken::from_yoctonear(0),
         30,
     );
@@ -117,6 +112,92 @@ async fn test_schedule_and_execute_after_delay() -> Result<(), Box<dyn std::erro
         "Executing twice should fail: {:#?}",
         outcome.outcomes()
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_predecessor_ordering() -> Result<(), Box<dyn std::error::Error>> {
+    let w = TreasuryTestWorkspaceBuilder::default()
+        .with_timelocks()
+        .build()
+        .await?;
+    let timelock = w.admin_timelock.as_ref().unwrap();
+    let alice = w.sandbox.dev_create_account().await?;
+    let bob = w.sandbox.dev_create_account().await?;
+
+    let limit = NearToken::from_near(10);
+    let alice_action = function_call(
+        "add_to_whitelist",
+        add_to_whitelist_action(alice.id(), limit),
+        NearToken::from_yoctonear(0),
+        30,
+    );
+    let bob_action = function_call(
+        "add_to_whitelist",
+        add_to_whitelist_action(bob.id(), limit),
+        NearToken::from_yoctonear(0),
+        30,
+    );
+
+    // Scheduling with an unknown predecessor is rejected.
+    let outcome = w
+        .schedule_after_raw(
+            &w.admin_dao,
+            timelock,
+            w.treasury.id(),
+            vec![alice_action.clone()],
+            NearToken::from_yoctonear(0),
+            99,
+        )
+        .await?;
+    assert!(
+        outcome.is_failure(),
+        "Scheduling with an unknown predecessor should fail: {:#?}",
+        outcome.outcomes()
+    );
+
+    // Schedule the first request, then a second one depending on it.
+    let first_id = w
+        .schedule(
+            &w.admin_dao,
+            timelock,
+            w.treasury.id(),
+            vec![alice_action],
+            NearToken::from_yoctonear(0),
+        )
+        .await?;
+    let second_id = w
+        .schedule_after(
+            &w.admin_dao,
+            timelock,
+            w.treasury.id(),
+            vec![bob_action],
+            NearToken::from_yoctonear(0),
+            first_id,
+        )
+        .await?;
+    let request = w.get_request(timelock, second_id).await?;
+    assert_eq!(request["predecessor_id"].as_u64().unwrap(), first_id);
+
+    // Past the delay the dependent request stays blocked until the predecessor executes.
+    w.fast_forward_to_executable(timelock, second_id).await?;
+    let outcome = w.execute(&w.admin_dao, timelock, second_id).await?;
+    assert!(
+        outcome.is_failure(),
+        "Executing before the predecessor should fail: {:#?}",
+        outcome.outcomes()
+    );
+    assert_eq!(w.get_num_requests(timelock).await?, 2);
+
+    let outcome = w.execute(&w.admin_dao, timelock, first_id).await?;
+    outcome_check(&outcome);
+    let outcome = w.execute(&w.admin_dao, timelock, second_id).await?;
+    outcome_check(&outcome);
+
+    assert!(w.is_whitelisted(alice.id()).await?);
+    assert!(w.is_whitelisted(bob.id()).await?);
+    assert_eq!(w.get_num_requests(timelock).await?, 0);
 
     Ok(())
 }

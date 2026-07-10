@@ -3,14 +3,8 @@ use near_sdk::json_types::U128;
 
 use crate::*;
 
-/// Gas reserved for the transfer-result callback.
 const ON_TRANSFER_GAS: Gas = Gas::from_tgas(10);
-
-/// Minimum gas reserved for the `ft_transfer` call on the token contract.
-/// All the prepaid gas left after the callback reservation is forwarded on top.
 const FT_TRANSFER_GAS: Gas = Gas::from_tgas(10);
-
-/// Attached deposit required by NEP-141 `ft_transfer`.
 const ONE_YOCTO: NearToken = NearToken::from_yoctonear(1);
 
 #[near]

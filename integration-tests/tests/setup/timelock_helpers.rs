@@ -2,7 +2,7 @@
 //! fast-forwarding past the delay and executing them.
 
 use crate::setup::{NS_IN_SECOND, TreasuryTestWorkspace};
-use near_sdk::json_types::Base64VecU8;
+use near_sdk::json_types::{Base64VecU8, U128};
 use near_sdk::{Gas, NearToken};
 use near_workspaces::result::ExecutionFinalResult;
 use near_workspaces::{Account, AccountId};
@@ -23,6 +23,17 @@ pub fn function_call(
         "args": Base64VecU8::from(serde_json::to_vec(&args).unwrap()),
         "deposit": deposit,
         "gas": Gas::from_tgas(tgas),
+    })
+}
+
+/// Builds the JSON arguments for an `add_to_whitelist` call granting
+/// `account_id` a NEAR spending limit.
+#[allow(dead_code)]
+pub fn add_to_whitelist_action(account_id: &AccountId, limit: NearToken) -> serde_json::Value {
+    json!({
+        "account_id": account_id,
+        "token_id": null,
+        "limit": U128(limit.as_yoctonear()),
     })
 }
 
@@ -60,6 +71,50 @@ impl TreasuryTestWorkspace {
     ) -> Result<u64, Box<dyn std::error::Error>> {
         let outcome = self
             .schedule_raw(dao, timelock, receiver_id, actions, deposit)
+            .await?;
+        assert!(
+            outcome.is_success(),
+            "Failed to schedule request: {:#?}",
+            outcome.outcomes()
+        );
+        Ok(outcome.unwrap().json()?)
+    }
+
+    /// Schedules a request with a predecessor without asserting the outcome.
+    pub async fn schedule_after_raw(
+        &self,
+        dao: &Account,
+        timelock: &Account,
+        receiver_id: &AccountId,
+        actions: Vec<serde_json::Value>,
+        deposit: NearToken,
+        predecessor_id: u64,
+    ) -> Result<ExecutionFinalResult, Box<dyn std::error::Error>> {
+        Ok(dao
+            .call(timelock.id(), "schedule")
+            .args_json(json!({
+                "receiver_id": receiver_id,
+                "actions": actions,
+                "predecessor_id": predecessor_id,
+            }))
+            .deposit(deposit)
+            .gas(Gas::from_tgas(50))
+            .transact()
+            .await?)
+    }
+
+    /// Schedules a request with a predecessor as the DAO and returns the new request id.
+    pub async fn schedule_after(
+        &self,
+        dao: &Account,
+        timelock: &Account,
+        receiver_id: &AccountId,
+        actions: Vec<serde_json::Value>,
+        deposit: NearToken,
+        predecessor_id: u64,
+    ) -> Result<u64, Box<dyn std::error::Error>> {
+        let outcome = self
+            .schedule_after_raw(dao, timelock, receiver_id, actions, deposit, predecessor_id)
             .await?;
         assert!(
             outcome.is_success(),

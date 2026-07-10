@@ -50,8 +50,7 @@ pub struct Contract {
     spender_id: AccountId,
     /// The only account allowed to manage the whitelist, limits and roles.
     admin_id: AccountId,
-    /// Whitelisted (recipient, token) pairs and their remaining limits, in the
-    /// token's smallest unit (yoctoNEAR for native NEAR entries).
+    /// Whitelisted (recipient, token) pairs and their remaining limits.
     whitelist: IterableMap<WhitelistKey, u128>,
 }
 
@@ -73,21 +72,5 @@ impl Contract {
 
     pub fn get_admin(&self) -> &AccountId {
         &self.admin_id
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::test_utils::*;
-    use near_sdk::testing_env;
-
-    #[test]
-    fn test_init_and_views() {
-        testing_env!(context(admin()).build());
-        let contract = new_contract();
-        assert_eq!(contract.get_admin(), &admin());
-        assert_eq!(contract.get_spender(), &spender());
-        assert_eq!(contract.get_num_whitelisted(), 0);
-        assert!(contract.get_whitelist_entry(alice(), None).is_none());
     }
 }

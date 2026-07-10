@@ -11,13 +11,11 @@ pub struct FunctionCall {
     pub gas: Gas,
 }
 
-/// The follow-up vote of a proposal request: after the `add_proposal` action
-/// resolves, the timelock approves the returned proposal id with this kind.
+/// The follow-up vote of a proposal request: after the `add_proposal` action.
 #[near(serializers = [borsh, json])]
 #[derive(Clone)]
 pub struct ProposalApproval {
-    /// Raw JSON of the proposal kind, re-submitted in `act_proposal` so the DAO
-    /// can verify the vote targets the intended proposal.
+    /// Raw JSON of the proposal kind.
     pub kind: String,
     /// Gas attached to the `act_proposal` call made from the callback.
     pub act_proposal_gas: Gas,
@@ -31,13 +29,16 @@ pub struct Request {
     pub receiver_id: AccountId,
     /// Function calls executed as a single atomic batch on the receiver.
     pub actions: Vec<FunctionCall>,
-    /// Account that escrowed the deposits (the DAO at schedule time); refunded on cancel.
+    /// Account that escrowed the deposits; refunded on cancel.
     pub funder_id: AccountId,
     /// Block timestamp (ns) after which the request can be executed.
     pub execute_after: U64,
-    /// `Some` marks a proposal request: `actions` holds the single `add_proposal`
-    /// call, followed by a `VoteApprove` on the proposal id it returns.
+    /// When set, this request adds a DAO proposal; the timelock then casts a
+    /// follow-up approving vote on the proposal id the DAO returns. `None` is plain.
     pub approve: Option<ProposalApproval>,
+    /// When set, this request can only be executed after the referenced request
+    /// is no longer pending (executed or cancelled).
+    pub predecessor_id: Option<u64>,
 }
 
 impl Request {
@@ -49,8 +50,7 @@ impl Request {
             })
     }
 
-    /// Total gas the request attaches at execution time: the sum of the action
-    /// gas, plus the `on_proposal_added` callback overhead for proposal requests.
+    /// Total gas the request attaches at execution time.
     pub(crate) fn total_gas(&self) -> Gas {
         let actions_gas = self.actions.iter().fold(Gas::from_gas(0), |acc, action| {
             acc.saturating_add(action.gas)
@@ -73,6 +73,7 @@ pub struct RequestOutput {
     pub funder_id: AccountId,
     pub execute_after: U64,
     pub approve: Option<ProposalApproval>,
+    pub predecessor_id: Option<u64>,
 }
 
 impl RequestOutput {
@@ -84,6 +85,7 @@ impl RequestOutput {
             funder_id: request.funder_id,
             execute_after: request.execute_after,
             approve: request.approve,
+            predecessor_id: request.predecessor_id,
         }
     }
 }

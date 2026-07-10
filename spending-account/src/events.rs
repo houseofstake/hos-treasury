@@ -1,6 +1,3 @@
-//! `EVENT_JSON` log emission. Call sites emit through the named functions here
-//! rather than constructing event names and JSON payloads inline.
-
 use near_sdk::json_types::U128;
 use near_sdk::{AccountId, NearToken, env};
 

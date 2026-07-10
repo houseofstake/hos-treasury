@@ -5,8 +5,8 @@ use near_sdk::{
     PromiseOrValue, env, near, require,
 };
 
+mod admin;
 mod events;
-mod owner;
 mod request;
 
 pub use request::*;
@@ -61,21 +61,28 @@ impl Contract {
     }
 
     /// Schedules a new request and returns its id. Only callable by the DAO.
-    /// The attached deposit must equal the sum of the action deposits; it is
-    /// escrowed and attached on execution or refunded to the funder on cancellation.
+    /// The attached deposit must equal the sum of the action deposits;
+    /// The optional predecessor must leave the queue before this one can execute.
     #[payable]
-    pub fn schedule(&mut self, receiver_id: AccountId, actions: Vec<FunctionCall>) -> u64 {
+    pub fn schedule(
+        &mut self,
+        receiver_id: AccountId,
+        actions: Vec<FunctionCall>,
+        predecessor_id: Option<u64>,
+    ) -> u64 {
         self.assert_dao();
         require!(
             !actions.is_empty(),
             "Request must contain at least one action"
         );
+        self.assert_predecessor(predecessor_id);
         let request = Request {
             receiver_id,
             actions,
             funder_id: env::predecessor_account_id(),
             execute_after: U64(env::block_timestamp().saturating_add(self.delay_ns)),
             approve: None,
+            predecessor_id,
         };
         require!(
             env::attached_deposit() == request.total_deposit(),
@@ -87,13 +94,14 @@ impl Contract {
         );
         let execute_after = request.execute_after;
         let request_id = self.insert_request(request);
-        events::schedule(request_id, execute_after);
+        events::schedule(request_id, execute_after, predecessor_id);
         request_id
     }
 
     /// Schedules a Sputnik proposal (`add_proposal`, then a `VoteApprove` in a callback). DAO-only.
     /// The attached deposit is the proposal bond. Approving executes the proposal, so
     /// `act_proposal_gas` must also cover its own action.
+    /// The optional predecessor must leave the queue before this one can execute.
     #[payable]
     pub fn schedule_proposal(
         &mut self,
@@ -101,8 +109,10 @@ impl Contract {
         kind: serde_json::Value,
         add_proposal_gas: Gas,
         act_proposal_gas: Gas,
+        predecessor_id: Option<u64>,
     ) -> u64 {
         self.assert_dao();
+        self.assert_predecessor(predecessor_id);
         let approval = ProposalApproval {
             kind: kind.to_string(),
             act_proposal_gas,
@@ -123,6 +133,7 @@ impl Contract {
             funder_id: env::predecessor_account_id(),
             execute_after: U64(env::block_timestamp().saturating_add(self.delay_ns)),
             approve: Some(approval),
+            predecessor_id,
         };
         require!(
             request.total_gas() <= MAX_EXECUTION_GAS,
@@ -130,13 +141,13 @@ impl Contract {
         );
         let execute_after = request.execute_after;
         let request_id = self.insert_request(request);
-        events::schedule_proposal(request_id, execute_after);
+        events::schedule_proposal(request_id, execute_after, predecessor_id);
         request_id
     }
 
-    /// Executes a request whose delay has passed. Callable by anyone (the DAO approved it at
-    /// schedule time and no guardian cancelled it). Removed up front so it can never run twice; the
-    /// actions run as one atomic batch, and if any fails the deposits return to this contract's balance.
+    /// Executes a request whose delay has passed. Callable by anyone.
+    /// The actions run as one atomic batch.
+    /// The predecessor (if any) must have left the queue first.
     pub fn execute(&mut self, request_id: u64) -> Promise {
         let request = self
             .requests
@@ -146,6 +157,12 @@ impl Contract {
             env::block_timestamp() >= request.execute_after.0,
             "The timelock delay has not passed yet"
         );
+        if let Some(predecessor_id) = request.predecessor_id {
+            require!(
+                !self.requests.contains_key(&predecessor_id),
+                "Predecessor request is still pending"
+            );
+        }
         events::execute(request_id, &request.receiver_id);
         let total_deposit = request.total_deposit();
         let mut promise = Promise::new(request.receiver_id.clone());
@@ -286,6 +303,16 @@ impl Contract {
         );
     }
 
+    /// Panics unless the predecessor (when given) is a pending request.
+    fn assert_predecessor(&self, predecessor_id: Option<u64>) {
+        if let Some(predecessor_id) = predecessor_id {
+            require!(
+                self.requests.contains_key(&predecessor_id),
+                "Predecessor request not found"
+            );
+        }
+    }
+
     /// Assigns the next id to the request, stores it, and returns the id.
     fn insert_request(&mut self, request: Request) -> u64 {
         let request_id = self.next_request_id;
@@ -339,12 +366,20 @@ mod tests {
     }
 
     fn schedule_one(contract: &mut Contract, deposit: u128) -> u64 {
+        schedule_after(contract, deposit, None)
+    }
+
+    fn schedule_after(contract: &mut Contract, deposit: u128, predecessor_id: Option<u64>) -> u64 {
         testing_env!(
             context(dao())
                 .attached_deposit(NearToken::from_yoctonear(deposit))
                 .build()
         );
-        contract.schedule("target.near".parse().unwrap(), vec![call_action(deposit)])
+        contract.schedule(
+            "target.near".parse().unwrap(),
+            vec![call_action(deposit)],
+            predecessor_id,
+        )
     }
 
     fn policy_kind() -> serde_json::Value {
@@ -362,6 +397,7 @@ mod tests {
             policy_kind(),
             Gas::from_tgas(30),
             Gas::from_tgas(100),
+            None,
         )
     }
 
@@ -404,7 +440,7 @@ mod tests {
         testing_env!(context(dao()).build());
         let mut contract = new_contract();
         testing_env!(context(guardian()).build());
-        contract.schedule("target.near".parse().unwrap(), vec![call_action(0)]);
+        contract.schedule("target.near".parse().unwrap(), vec![call_action(0)], None);
     }
 
     #[test]
@@ -417,7 +453,7 @@ mod tests {
                 .attached_deposit(NearToken::from_yoctonear(1))
                 .build()
         );
-        contract.schedule("target.near".parse().unwrap(), vec![call_action(5)]);
+        contract.schedule("target.near".parse().unwrap(), vec![call_action(5)], None);
     }
 
     #[test]
@@ -425,7 +461,7 @@ mod tests {
     fn test_schedule_empty_fails() {
         testing_env!(context(dao()).build());
         let mut contract = new_contract();
-        contract.schedule("target.near".parse().unwrap(), vec![]);
+        contract.schedule("target.near".parse().unwrap(), vec![], None);
     }
 
     #[test]
@@ -439,7 +475,7 @@ mod tests {
             deposit: NearToken::from_yoctonear(0),
             gas: MAX_EXECUTION_GAS.saturating_add(Gas::from_tgas(1)),
         };
-        contract.schedule("target.near".parse().unwrap(), vec![action]);
+        contract.schedule("target.near".parse().unwrap(), vec![action], None);
     }
 
     // --- schedule_proposal ---
@@ -484,6 +520,7 @@ mod tests {
             policy_kind(),
             Gas::from_tgas(30),
             Gas::from_tgas(100),
+            None,
         );
     }
 
@@ -556,6 +593,107 @@ mod tests {
         );
         contract.execute(request_id);
         assert_eq!(contract.get_num_requests(), 0);
+    }
+
+    // --- predecessor ---
+
+    #[test]
+    fn test_schedule_with_predecessor() {
+        testing_env!(context(dao()).build());
+        let mut contract = new_contract();
+        let first_id = schedule_one(&mut contract, 0);
+        let second_id = schedule_after(&mut contract, 0, Some(first_id));
+        assert_eq!(contract.get_request(first_id).unwrap().predecessor_id, None);
+        assert_eq!(
+            contract.get_request(second_id).unwrap().predecessor_id,
+            Some(first_id)
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Predecessor request not found")]
+    fn test_schedule_unknown_predecessor_fails() {
+        testing_env!(context(dao()).build());
+        let mut contract = new_contract();
+        schedule_after(&mut contract, 0, Some(42));
+    }
+
+    #[test]
+    #[should_panic(expected = "Predecessor request not found")]
+    fn test_schedule_executed_predecessor_fails() {
+        testing_env!(context(dao()).build());
+        let mut contract = new_contract();
+        let first_id = schedule_one(&mut contract, 0);
+        testing_env!(context(dao()).block_timestamp(START_TS + DELAY_NS).build());
+        contract.execute(first_id);
+        schedule_after(&mut contract, 0, Some(first_id));
+    }
+
+    #[test]
+    fn test_schedule_with_proposal_predecessor() {
+        testing_env!(context(dao()).build());
+        let mut contract = new_contract();
+        let proposal_id = schedule_proposal_one(&mut contract, 7);
+        let request_id = schedule_after(&mut contract, 0, Some(proposal_id));
+        assert_eq!(
+            contract.get_request(request_id).unwrap().predecessor_id,
+            Some(proposal_id)
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Predecessor request is still pending")]
+    fn test_execute_blocked_by_pending_predecessor() {
+        testing_env!(context(dao()).build());
+        let mut contract = new_contract();
+        let first_id = schedule_one(&mut contract, 0);
+        let second_id = schedule_after(&mut contract, 0, Some(first_id));
+        testing_env!(context(dao()).block_timestamp(START_TS + DELAY_NS).build());
+        contract.execute(second_id);
+    }
+
+    #[test]
+    fn test_execute_after_predecessor_executed() {
+        testing_env!(context(dao()).build());
+        let mut contract = new_contract();
+        let first_id = schedule_one(&mut contract, 0);
+        let second_id = schedule_after(&mut contract, 0, Some(first_id));
+        testing_env!(context(dao()).block_timestamp(START_TS + DELAY_NS).build());
+        contract.execute(first_id);
+        contract.execute(second_id);
+        assert_eq!(contract.get_num_requests(), 0);
+    }
+
+    #[test]
+    fn test_execute_after_predecessor_cancelled() {
+        testing_env!(context(dao()).build());
+        let mut contract = new_contract();
+        let first_id = schedule_one(&mut contract, 0);
+        let second_id = schedule_after(&mut contract, 0, Some(first_id));
+        testing_env!(context(guardian()).build());
+        contract.cancel(first_id);
+        testing_env!(context(dao()).block_timestamp(START_TS + DELAY_NS).build());
+        contract.execute(second_id);
+        assert_eq!(contract.get_num_requests(), 0);
+    }
+
+    #[test]
+    fn test_schedule_proposal_with_predecessor() {
+        testing_env!(context(dao()).build());
+        let mut contract = new_contract();
+        let first_id = schedule_one(&mut contract, 0);
+        testing_env!(context(dao()).build());
+        let proposal_id = contract.schedule_proposal(
+            "change the policy".to_string(),
+            policy_kind(),
+            Gas::from_tgas(30),
+            Gas::from_tgas(100),
+            Some(first_id),
+        );
+        assert_eq!(
+            contract.get_request(proposal_id).unwrap().predecessor_id,
+            Some(first_id)
+        );
     }
 
     // --- cancel ---

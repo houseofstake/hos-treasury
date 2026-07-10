@@ -3,10 +3,9 @@
 
 mod setup;
 
-use crate::setup::timelock_helpers::function_call;
+use crate::setup::timelock_helpers::{add_to_whitelist_action, function_call};
 use crate::setup::{TreasuryTestWorkspaceBuilder, outcome_check};
 use near_sdk::NearToken;
-use near_sdk::json_types::U128;
 use serde_json::json;
 
 #[tokio::test]
@@ -41,11 +40,7 @@ async fn test_dao_to_treasury_flow() -> Result<(), Box<dyn std::error::Error>> {
             admin_timelock,
             w.treasury.id(),
             "add_to_whitelist",
-            json!({
-                "account_id": alice.id(),
-                "token_id": null,
-                "limit": U128(limit.as_yoctonear()),
-            }),
+            add_to_whitelist_action(alice.id(), limit),
             NearToken::from_yoctonear(0),
             30,
         )
@@ -101,11 +96,7 @@ async fn test_role_separation_between_timelocks() -> Result<(), Box<dyn std::err
             spender_timelock,
             w.treasury.id(),
             "add_to_whitelist",
-            json!({
-                "account_id": alice.id(),
-                "token_id": null,
-                "limit": U128(limit.as_yoctonear()),
-            }),
+            add_to_whitelist_action(alice.id(), limit),
             NearToken::from_yoctonear(0),
             30,
         )
@@ -153,11 +144,7 @@ async fn test_guardian_cancels_malicious_transfer() -> Result<(), Box<dyn std::e
             admin_timelock,
             w.treasury.id(),
             "add_to_whitelist",
-            json!({
-                "account_id": alice.id(),
-                "token_id": null,
-                "limit": U128(limit.as_yoctonear()),
-            }),
+            add_to_whitelist_action(alice.id(), limit),
             NearToken::from_yoctonear(0),
             30,
         )

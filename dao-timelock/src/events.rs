@@ -16,21 +16,24 @@ fn emit_event(event: &str, data: serde_json::Value) {
     ));
 }
 
-pub(crate) fn schedule(request_id: u64, execute_after: U64) {
-    emit_scheduled("schedule", request_id, execute_after);
-}
-
-pub(crate) fn schedule_proposal(request_id: u64, execute_after: U64) {
-    emit_scheduled("schedule_proposal", request_id, execute_after);
-}
-
-/// Shared payload for the two request-scheduling events.
-fn emit_scheduled(event: &str, request_id: u64, execute_after: U64) {
+pub(crate) fn schedule(request_id: u64, execute_after: U64, predecessor_id: Option<u64>) {
     emit_event(
-        event,
+        "schedule",
         serde_json::json!({
             "request_id": request_id,
             "execute_after": execute_after,
+            "predecessor_id": predecessor_id,
+        }),
+    );
+}
+
+pub(crate) fn schedule_proposal(request_id: u64, execute_after: U64, predecessor_id: Option<u64>) {
+    emit_event(
+        "schedule_proposal",
+        serde_json::json!({
+            "request_id": request_id,
+            "execute_after": execute_after,
+            "predecessor_id": predecessor_id,
         }),
     );
 }

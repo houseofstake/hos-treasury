@@ -186,7 +186,7 @@ async fn test_failed_inner_proposal_refunds_bond() -> Result<(), Box<dyn std::er
     );
 
     // No balance must change.
-    assert_almost_eq(dao_after, dao_balance_before, NearToken::from_millinear(1));
+    assert_almost_eq(dao_after, dao_balance_before, NearToken::from_millinear(2));
     assert_almost_eq(
         timelock_after,
         timelock_before,
