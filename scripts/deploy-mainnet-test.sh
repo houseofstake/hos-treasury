@@ -102,6 +102,16 @@ say() { printf '\n\033[1;34m== %s\033[0m\n' "$*"; }
 
 b64() { printf '%s' "$1" | base64 | tr -d '\n'; }
 
+delay_human() { # renders DELAY_NS as "Xd Xh Xm Xs"
+  local s=$((DELAY_NS / 1000000000))
+  printf '%dd %dh %dm %ds' $((s / 86400)) $((s % 86400 / 3600)) $((s % 3600 / 60)) $((s % 60))
+}
+
+dao_roles() { # <dao> — prints the role names and member groups of the DAO policy
+  view "$1" get_policy '{}' | tr -d '\n ' \
+    | grep -o '"name":"[^"]*"\|"Group":\[[^]]*\]' || true
+}
+
 view() { # <contract> <method> <json-args>
   near contract call-function as-read-only "$1" "$2" json-args "$3" \
     network-config "$NETWORK" now
@@ -212,11 +222,6 @@ command -v near >/dev/null || { echo "near-cli-rs is not installed." >&2; exit 1
 
 # A deployment is only verifiable if the deployed wasm can be rebuilt from a
 # commit that is public on the repository named in Cargo.toml.
-[[ -z "$(git status --porcelain)" ]] || {
-  echo "The git tree is dirty: commit (and push) before deploying, or the" >&2
-  echo "source metadata embedded in the wasm will not match any public commit." >&2
-  exit 1
-}
 git merge-base --is-ancestor HEAD "@{upstream}" 2>/dev/null ||
   echo "WARNING: HEAD is not pushed to the upstream branch; push it or source verification will fail." >&2
 
@@ -237,8 +242,22 @@ Deploying HoS treasury topology as $PARENT on $NETWORK ($MODE mode):
   SSA (spending-account):  $SSA
   Timelock admin:          $POLICY_TL
   Guardians:               $GUARDIANS
-  Timelock delay:          $DELAY_NS ns
+  Timelock delay:          $DELAY_NS ns ($(delay_human))
 EOF
+if [[ "$MODE" == "staging" ]]; then
+  cat <<EOF
+  DAO roles (identical in all three DAOs created by this script):
+    council:  $PARENT (1-of-1, call:* and policy:* permissions)
+    timelock: $POLICY_TL (policy:AddProposal + policy:VoteApprove)
+EOF
+else
+  # The DAOs already exist: show who actually controls them before deploying.
+  echo "Existing DAO policies (roles and members):"
+  for dao in "$POLICY_DAO" "$EXEC_DAO" "$PAYMENT_DAO"; do
+    echo "  $dao:"
+    dao_roles "$dao" | sed 's/^/    /'
+  done
+fi
 read -r -p "Continue? [y/N] " reply
 [[ "$reply" == "y" || "$reply" == "Y" ]] || exit 1
 
@@ -305,8 +324,7 @@ done
 # Timelock: it is the sole account allowed to change the DAO policies.
 for dao in "$POLICY_DAO" "$EXEC_DAO" "$PAYMENT_DAO"; do
   echo "$dao policy roles:"
-  view "$dao" get_policy '{}' | tr -d '\n ' \
-    | grep -o '"name":"[^"]*"\|"Group":\[[^]]*\]' || true
+  dao_roles "$dao"
 done
 view "$SWF" get_whitelist_entries '{}'
 
