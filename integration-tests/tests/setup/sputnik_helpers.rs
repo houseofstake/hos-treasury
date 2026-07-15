@@ -165,6 +165,7 @@ pub async fn setup_sputnik_workspace()
             Function::new("new")
                 .args_json(json!({
                     "dao_id": dao.id(),
+                    "admin_id": timelock.id(),
                     "guardians": [guardian.id()],
                     "delay_ns": U64(TIMELOCK_DELAY_SECONDS * NS_IN_SECOND),
                 }))

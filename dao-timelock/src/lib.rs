@@ -32,6 +32,8 @@ enum StorageKey {
 pub struct Contract {
     /// The Sputnik DAO account. The only account allowed to schedule requests.
     dao_id: AccountId,
+    /// The only account allowed to change the configuration.
+    admin_id: AccountId,
     /// Accounts allowed to cancel pending requests.
     guardians: IterableSet<AccountId>,
     /// Delay between scheduling and the earliest possible execution, in nanoseconds.
@@ -45,10 +47,16 @@ pub struct Contract {
 #[near]
 impl Contract {
     #[init]
-    pub fn new(dao_id: AccountId, guardians: Vec<AccountId>, delay_ns: U64) -> Self {
+    pub fn new(
+        dao_id: AccountId,
+        admin_id: AccountId,
+        guardians: Vec<AccountId>,
+        delay_ns: U64,
+    ) -> Self {
         require!(delay_ns.0 <= MAX_DELAY_NS, "Delay exceeds the maximum");
         let mut contract = Self {
             dao_id,
+            admin_id,
             guardians: IterableSet::new(StorageKey::Guardians),
             delay_ns: delay_ns.0,
             next_request_id: 0,
@@ -257,6 +265,10 @@ impl Contract {
         &self.dao_id
     }
 
+    pub fn get_admin(&self) -> &AccountId {
+        &self.admin_id
+    }
+
     pub fn get_guardians(&self) -> Vec<&AccountId> {
         self.guardians.iter().collect()
     }
@@ -339,6 +351,10 @@ mod tests {
         "timelock.near".parse().unwrap()
     }
 
+    fn admin() -> AccountId {
+        "admin.near".parse().unwrap()
+    }
+
     fn guardian() -> AccountId {
         "guardian.near".parse().unwrap()
     }
@@ -353,7 +369,7 @@ mod tests {
     }
 
     fn new_contract() -> Contract {
-        Contract::new(dao(), vec![guardian()], U64(DELAY_NS))
+        Contract::new(dao(), admin(), vec![guardian()], U64(DELAY_NS))
     }
 
     fn call_action(deposit: u128) -> FunctionCall {
@@ -408,6 +424,7 @@ mod tests {
         testing_env!(context(dao()).build());
         let contract = new_contract();
         assert_eq!(contract.get_dao(), &dao());
+        assert_eq!(contract.get_admin(), &admin());
         assert_eq!(contract.get_guardians(), vec![&guardian()]);
         assert_eq!(contract.get_delay(), U64(DELAY_NS));
         assert_eq!(contract.get_num_requests(), 0);
@@ -731,20 +748,40 @@ mod tests {
     // --- setters ---
 
     #[test]
-    fn test_set_dao_by_self() {
+    fn test_set_dao_by_admin() {
         testing_env!(context(dao()).build());
         let mut contract = new_contract();
-        testing_env!(context(timelock()).build());
+        testing_env!(context(admin()).build());
         let new_dao: AccountId = "dao2.near".parse().unwrap();
         contract.set_dao(new_dao.clone());
         assert_eq!(contract.get_dao(), &new_dao);
     }
 
     #[test]
-    fn test_set_guardians_by_self() {
+    fn test_set_admin_by_admin() {
         testing_env!(context(dao()).build());
         let mut contract = new_contract();
-        testing_env!(context(timelock()).build());
+        testing_env!(context(admin()).build());
+        let new_admin: AccountId = "admin2.near".parse().unwrap();
+        contract.set_admin(new_admin.clone());
+        assert_eq!(contract.get_admin(), &new_admin);
+    }
+
+    #[test]
+    #[should_panic(expected = "Only the admin")]
+    fn test_set_admin_by_old_admin_fails() {
+        testing_env!(context(dao()).build());
+        let mut contract = new_contract();
+        testing_env!(context(admin()).build());
+        contract.set_admin("admin2.near".parse().unwrap());
+        contract.set_admin(admin());
+    }
+
+    #[test]
+    fn test_set_guardians_by_admin() {
+        testing_env!(context(dao()).build());
+        let mut contract = new_contract();
+        testing_env!(context(admin()).build());
         let g2: AccountId = "guardian2.near".parse().unwrap();
         let g3: AccountId = "guardian3.near".parse().unwrap();
         contract.set_guardians(vec![g2.clone(), g3.clone()]);
@@ -756,9 +793,37 @@ mod tests {
     }
 
     #[test]
-    fn test_set_delay_by_self() {
+    fn test_set_delay_by_admin() {
         testing_env!(context(dao()).build());
         let mut contract = new_contract();
+        testing_env!(context(admin()).build());
+        contract.set_delay(U64(2 * DELAY_NS));
+        assert_eq!(contract.get_delay(), U64(2 * DELAY_NS));
+    }
+
+    #[test]
+    #[should_panic(expected = "Only the admin")]
+    fn test_set_delay_by_dao_fails() {
+        testing_env!(context(dao()).build());
+        let mut contract = new_contract();
+        contract.set_delay(U64(2 * DELAY_NS));
+    }
+
+    #[test]
+    #[should_panic(expected = "Only the admin")]
+    fn test_set_dao_by_self_fails() {
+        testing_env!(context(dao()).build());
+        let mut contract = new_contract();
+        testing_env!(context(timelock()).build());
+        contract.set_dao("dao2.near".parse().unwrap());
+    }
+
+    #[test]
+    fn test_setters_by_self_when_self_admin() {
+        // A timelock whose admin is itself is configured through its own
+        // scheduled requests, like before the admin role existed.
+        testing_env!(context(dao()).build());
+        let mut contract = Contract::new(dao(), timelock(), vec![guardian()], U64(DELAY_NS));
         testing_env!(context(timelock()).build());
         contract.set_delay(U64(2 * DELAY_NS));
         assert_eq!(contract.get_delay(), U64(2 * DELAY_NS));
@@ -769,7 +834,7 @@ mod tests {
     fn test_set_delay_too_large_fails() {
         testing_env!(context(dao()).build());
         let mut contract = new_contract();
-        testing_env!(context(timelock()).build());
+        testing_env!(context(admin()).build());
         contract.set_delay(U64(MAX_DELAY_NS + 1));
     }
 }

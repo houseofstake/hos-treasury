@@ -24,6 +24,16 @@ async fn test_init_and_views() -> Result<(), Box<dyn std::error::Error>> {
         .json()?;
     assert_eq!(&dao, w.admin_dao.id().as_str(), "Invalid DAO");
 
+    for tl in [timelock, w.spender_timelock.as_ref().unwrap()] {
+        let admin: String = w
+            .sandbox
+            .view(tl.id(), "get_admin")
+            .args_json(json!({}))
+            .await?
+            .json()?;
+        assert_eq!(&admin, timelock.id().as_str(), "Invalid admin");
+    }
+
     let guardians: Vec<String> = w
         .sandbox
         .view(timelock.id(), "get_guardians")
@@ -360,7 +370,8 @@ async fn test_config_change_via_scheduled_request() -> Result<(), Box<dyn std::e
         );
     }
 
-    // The config is changed by the timelock calling itself via a scheduled request.
+    // The admin timelock is its own admin, so the config is changed by the
+    // timelock calling itself via a scheduled request.
     let outcome = w
         .dao_action(
             &w.admin_dao,
@@ -421,6 +432,54 @@ async fn test_config_change_via_scheduled_request() -> Result<(), Box<dyn std::e
     );
     let outcome = w.cancel(&new_guardian, timelock, request_id).await?;
     outcome_check(&outcome);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_admin_timelock_administers_spender_timelock() -> Result<(), Box<dyn std::error::Error>>
+{
+    let w = TreasuryTestWorkspaceBuilder::default()
+        .with_timelocks()
+        .build()
+        .await?;
+    let admin_timelock = w.admin_timelock.as_ref().unwrap();
+    let spender_timelock = w.spender_timelock.as_ref().unwrap();
+    let new_delay_ns = NS_IN_SECOND;
+
+    // The spender DAO cannot change its own timelock's config, not even via a
+    // scheduled self-call: the spender timelock is not its own admin.
+    let outcome = w
+        .dao_action(
+            &w.spender_dao,
+            spender_timelock,
+            spender_timelock.id(),
+            "set_delay",
+            json!({ "delay_ns": new_delay_ns.to_string() }),
+            NearToken::from_yoctonear(0),
+            10,
+        )
+        .await?;
+    assert!(
+        outcome.is_failure(),
+        "Config change through the spender's own timelock should fail"
+    );
+    assert_ne!(w.get_delay_ns(spender_timelock).await?, new_delay_ns);
+
+    // The admin DAO changes it through the admin timelock, which is the admin.
+    let outcome = w
+        .dao_action(
+            &w.admin_dao,
+            admin_timelock,
+            spender_timelock.id(),
+            "set_delay",
+            json!({ "delay_ns": new_delay_ns.to_string() }),
+            NearToken::from_yoctonear(0),
+            10,
+        )
+        .await?;
+    outcome_check(&outcome);
+    assert_eq!(w.get_delay_ns(spender_timelock).await?, new_delay_ns);
 
     Ok(())
 }

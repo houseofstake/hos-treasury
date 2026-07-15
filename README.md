@@ -48,9 +48,10 @@ All contracts are designed to be deployed without access keys, to make sure the 
   - A request is removed from storage before execution, so it can never run twice.
   - Guardians can only cancel pending requests; they cannot schedule, execute early, or change the configuration.
     Cancelling refunds the escrowed deposits to the funder.
-  - Configuration changes (`set_dao`, `set_guardians`, `set_delay`) are callable only by the timelock account itself,
-    so every change must go through a scheduled request and wait out the delay. The delay is capped at 366 days to
-    protect against a typo bricking the DAO forever.
+  - Configuration changes (`set_dao`, `set_admin`, `set_guardians`, `set_delay`) are callable only by the configured
+    admin — the Policy Timelock for every timelock, including the Policy Timelock itself — so every change must be
+    scheduled through a timelock and wait out its delay. The delay is capped at 366 days to protect against a typo
+    bricking the DAO forever.
   - Action deposits are escrowed at schedule time: the attached deposit must equal the sum of the action deposits, and
     it is either attached on execution or refunded on cancellation.
 - **spending-account**

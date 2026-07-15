@@ -8,8 +8,8 @@ A timelock contract that sits between a [Sputnik DAO](https://github.com/near-da
 - **Anyone can execute** a request once its delay has passed — it was already approved by the DAO and survived the guardian review window. A request is removed from state before the promise is created, so it can never execute twice.
 - **Optional ordering between requests.** A request may name a pending request as its `predecessor_id`; it then becomes executable only once the predecessor has been executed or cancelled. NEAR processes receipts to the same receiver in dispatch order, so at a shared receiver the predecessor's batch runs before the dependent one (use this for e.g. upgrade-then-migrate). Caveats: the predecessor's *success* is not checked; ordering across different receivers is dispatch-order only; a proposal-request predecessor is only ordered up to its `add_proposal` dispatch (the approving vote and the proposal's own effects fire later, from callbacks); cancelling a predecessor unblocks its dependents, so guardians should review those too.
 - **Any guardian can cancel** a pending request. The escrowed deposit is refunded to the funder.
-- **Config changes go through the timelock too.** `set_dao`, `set_guardians`, and `set_delay` are only callable by the timelock account itself, so the DAO must schedule them as requests targeting the timelock and wait out the same delay. Guardians can cancel these like any other request — including an attempt to remove the guardians.
-- **Not upgradable by design.** There is no method to deploy new code or migrate state. To move to a new timelock, the DAO points its own workflows at a new contract; to move to a new DAO, the current DAO schedules `set_dao`.
+- **Config changes are admin-only.** `set_dao`, `set_admin`, `set_guardians`, and `set_delay` are only callable by the configured admin. The admin is expected to be a timelock itself — the Policy Timelock in the HoS topology, or the contract's own account for a self-administered timelock — so config changes are scheduled as requests and wait out a delay, and guardians can cancel them like any other request, including an attempt to remove the guardians.
+- **Not upgradable by design.** There is no method to deploy new code or migrate state. To move to a new timelock, the DAO points its own workflows at a new contract; to move to a new DAO, the admin schedules `set_dao`.
 
 ## Deposit semantics
 
@@ -33,15 +33,15 @@ The timelock should hold a small NEAR balance to cover storage for pending reque
 
 Same as above with `receiver_id = <dao account>` and an action calling the DAO's policy-change method — the DAO's self-updates are timelocked because the DAO grants the timelock (not its members directly) the permission to make them.
 
-### DAO updates the timelock's guardians
+### Admin updates a timelock's guardians
 
-`schedule` with `receiver_id = <timelock account>` and action `set_guardians {"guardians": [...]}`. After the delay, `execute` makes the timelock call itself, which passes the self-only check.
+On the admin timelock: `schedule` with `receiver_id = <target timelock account>` and action `set_guardians {"guardians": [...]}`. After the delay, `execute` makes the admin timelock call the target, which passes the admin-only check. A self-administered timelock is the target of its own request.
 
 ## API
 
 ```rust
 // Init (contract is PanicOnDefault; deploy + call new)
-new(dao_id: AccountId, guardians: Vec<AccountId>, delay_ns: U64)
+new(dao_id: AccountId, admin_id: AccountId, guardians: Vec<AccountId>, delay_ns: U64)
 
 // State-changing
 #[payable] schedule(receiver_id: AccountId, actions: Vec<FunctionCall>,
@@ -51,13 +51,15 @@ new(dao_id: AccountId, guardians: Vec<AccountId>, delay_ns: U64)
 execute(request_id: u64) -> Promise                                            // anyone, after delay
 cancel(request_id: u64)                                                        // guardian
 
-// Self-only (must be scheduled through the timelock)
+// Admin-only (expected to be scheduled through the admin timelock)
 set_dao(dao_id: AccountId)
+set_admin(admin_id: AccountId)
 set_guardians(guardians: Vec<AccountId>)
 set_delay(delay_ns: U64)  // capped at 366 days
 
 // Views
 get_dao() -> AccountId
+get_admin() -> AccountId
 get_guardians() -> Vec<AccountId>
 get_delay() -> U64
 get_next_request_id() -> u64
@@ -77,4 +79,4 @@ get_requests(from_index: Option<u32>, limit: Option<u32>) -> Vec<RequestOutput>
 }
 ```
 
-All state changes emit `EVENT_JSON` logs (standard `dao-timelock`, events `schedule`, `execute`, `cancel`, `set_dao`, `set_guardians`, `set_delay`).
+Request lifecycle changes emit `EVENT_JSON` logs (standard `dao-timelock`, events `schedule`, `schedule_proposal`, `execute`, `approve_proposal`, `proposal_failed`, `cancel`).

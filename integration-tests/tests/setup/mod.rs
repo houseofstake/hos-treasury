@@ -35,7 +35,8 @@ pub struct TreasuryTestWorkspace {
     pub admin_dao: Account,
     /// The account acting as the spender DAO.
     pub spender_dao: Account,
-    /// Timelock controlled by `admin_dao`, holding the treasury admin role.
+    /// Timelock controlled by `admin_dao`, holding the treasury admin role and
+    /// the admin role of both timelocks (its own included).
     pub admin_timelock: Option<Account>,
     /// Timelock controlled by `spender_dao`, holding the treasury spender role.
     pub spender_timelock: Option<Account>,
@@ -73,9 +74,14 @@ impl TreasuryTestWorkspaceBuilder {
 
         let (admin_timelock, spender_timelock) = if self.deploy_timelocks {
             let timelock_wasm = std::fs::read(TIMELOCK_WASM_FILEPATH)?;
-            let mut timelocks = Vec::new();
-            for dao in [&admin_dao, &spender_dao] {
-                let timelock = sandbox.dev_create_account().await?;
+            let admin_timelock = sandbox.dev_create_account().await?;
+            let spender_timelock = sandbox.dev_create_account().await?;
+            // The admin timelock administers every timelock, including itself:
+            // its own config changes go through its own scheduled requests.
+            for (timelock, dao) in [
+                (&admin_timelock, &admin_dao),
+                (&spender_timelock, &spender_dao),
+            ] {
                 let outcome = timelock
                     .batch(timelock.id())
                     .deploy(&timelock_wasm)
@@ -83,6 +89,7 @@ impl TreasuryTestWorkspaceBuilder {
                         Function::new("new")
                             .args_json(json!({
                                 "dao_id": dao.id(),
+                                "admin_id": admin_timelock.id(),
                                 "guardians": &[guardian.id()],
                                 "delay_ns": U64(self.delay_ns),
                             }))
@@ -95,10 +102,7 @@ impl TreasuryTestWorkspaceBuilder {
                     "Failed to deploy dao-timelock: {:#?}",
                     outcome.outcomes()
                 );
-                timelocks.push(timelock);
             }
-            let spender_timelock = timelocks.pop().unwrap();
-            let admin_timelock = timelocks.pop().unwrap();
             (Some(admin_timelock), Some(spender_timelock))
         } else {
             (None, None)
