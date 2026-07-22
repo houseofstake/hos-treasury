@@ -179,9 +179,17 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "Only the spender can transfer")]
+    fn test_near_transfer_by_manager_fails() {
+        let mut contract = near_contract_with_alice(100);
+        testing_env!(context(manager()).build());
+        contract.transfer(alice(), NearToken::from_near(1));
+    }
+
+    #[test]
     #[should_panic(expected = "Receiver is not whitelisted")]
     fn test_near_transfer_to_non_whitelisted_fails() {
-        testing_env!(context(admin()).build());
+        testing_env!(context(manager()).build());
         let mut contract = new_contract();
         testing_env!(context(spender()).build());
         contract.transfer(alice(), NearToken::from_near(1));
@@ -200,8 +208,8 @@ mod tests {
         let mut contract = near_contract_with_alice(100);
         testing_env!(context(spender()).build());
         contract.transfer(alice(), NearToken::from_near(100));
-        // The allowance is used up; the admin must raise it to allow more.
-        testing_env!(context(admin()).build());
+        // The allowance is used up; the manager must raise it to allow more.
+        testing_env!(context(manager()).build());
         contract.increase_limit(alice(), None, yocto(50));
         testing_env!(context(spender()).build());
         contract.transfer(alice(), NearToken::from_near(50));
@@ -235,7 +243,7 @@ mod tests {
         contract.transfer(alice(), NearToken::from_near(60));
         // The account is removed and re-added before the failed transfer's
         // callback lands: the refund is added on top of the fresh limit.
-        testing_env!(context(admin()).build());
+        testing_env!(context(manager()).build());
         contract.remove_from_whitelist(alice(), None);
         contract.add_to_whitelist(alice(), None, yocto(100));
         testing_env!(context(treasury()).build());
@@ -248,7 +256,7 @@ mod tests {
         let mut contract = near_contract_with_alice(100);
         testing_env!(context(spender()).build());
         contract.transfer(alice(), NearToken::from_near(60));
-        testing_env!(context(admin()).build());
+        testing_env!(context(manager()).build());
         contract.remove_from_whitelist(alice(), None);
         testing_env!(context(treasury()).build());
         contract.on_transfer(alice(), NearToken::from_near(60), Err(PromiseError::Failed));
@@ -302,7 +310,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "Receiver is not whitelisted for this token")]
     fn test_ft_near_whitelist_does_not_grant_ft() {
-        testing_env!(context(admin()).build());
+        testing_env!(context(manager()).build());
         let mut contract = new_contract();
         contract.add_to_whitelist(
             alice(),
@@ -326,8 +334,8 @@ mod tests {
         let mut contract = ft_contract_with_alice(FT_LIMIT);
         testing_env!(context(spender()).build());
         contract.transfer_ft(alice(), token(), U128(FT_LIMIT));
-        // The allowance is used up; the admin must raise it to allow more.
-        testing_env!(context(admin()).build());
+        // The allowance is used up; the manager must raise it to allow more.
+        testing_env!(context(manager()).build());
         contract.increase_limit(alice(), Some(token()), U128(50));
         testing_env!(context(spender()).build());
         contract.transfer_ft(alice(), token(), U128(50));
@@ -361,7 +369,7 @@ mod tests {
         contract.transfer_ft(alice(), token(), U128(60));
         // The pair is removed and re-added before the failed transfer's
         // callback lands: the refund is added on top of the fresh limit.
-        testing_env!(context(admin()).build());
+        testing_env!(context(manager()).build());
         contract.remove_from_whitelist(alice(), Some(token()));
         contract.add_to_whitelist(alice(), Some(token()), U128(FT_LIMIT));
         testing_env!(context(treasury()).build());
@@ -374,7 +382,7 @@ mod tests {
         let mut contract = ft_contract_with_alice(FT_LIMIT);
         testing_env!(context(spender()).build());
         contract.transfer_ft(alice(), token(), U128(60));
-        testing_env!(context(admin()).build());
+        testing_env!(context(manager()).build());
         contract.remove_from_whitelist(alice(), Some(token()));
         testing_env!(context(treasury()).build());
         contract.on_transfer_ft(alice(), token(), U128(60), Err(PromiseError::Failed));

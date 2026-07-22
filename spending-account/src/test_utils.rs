@@ -17,6 +17,10 @@ pub(crate) fn admin() -> AccountId {
     "admin-timelock.near".parse().unwrap()
 }
 
+pub(crate) fn manager() -> AccountId {
+    "manager-timelock.near".parse().unwrap()
+}
+
 pub(crate) fn spender() -> AccountId {
     "spender-timelock.near".parse().unwrap()
 }
@@ -46,13 +50,13 @@ pub(crate) fn context(predecessor: AccountId) -> VMContextBuilder {
 }
 
 pub(crate) fn new_contract() -> Contract {
-    Contract::new(admin(), spender())
+    Contract::new(admin(), manager(), spender())
 }
 
 /// A fresh contract with alice whitelisted for `token_id` at `limit`.
-/// Leaves the admin as the predecessor in the testing environment.
+/// Leaves the manager as the predecessor in the testing environment.
 pub(crate) fn contract_with_alice(token_id: Option<AccountId>, limit: U128) -> Contract {
-    testing_env!(context(admin()).build());
+    testing_env!(context(manager()).build());
     let mut contract = new_contract();
     contract.add_to_whitelist(alice(), token_id, limit);
     contract

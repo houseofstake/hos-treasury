@@ -8,6 +8,12 @@ impl Contract {
         self.spender_id = spender_id;
     }
 
+    /// Changes the account allowed to manage the whitelist and limits.
+    pub fn set_manager(&mut self, manager_id: AccountId) {
+        self.assert_admin();
+        self.manager_id = manager_id;
+    }
+
     /// Transfers the admin role to another account.
     pub fn set_admin(&mut self, admin_id: AccountId) {
         self.assert_admin();
@@ -22,6 +28,13 @@ impl Contract {
             "Only the admin can call this method"
         );
     }
+
+    pub(crate) fn assert_manager(&self) {
+        require!(
+            env::predecessor_account_id() == self.manager_id,
+            "Only the manager can call this method"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -31,13 +44,16 @@ mod tests {
     use near_sdk::testing_env;
 
     #[test]
-    fn test_set_spender_and_admin() {
+    fn test_set_roles() {
         testing_env!(context(admin()).build());
         let mut contract = new_contract();
         let new_spender: AccountId = "spender2.near".parse().unwrap();
+        let new_manager: AccountId = "manager2.near".parse().unwrap();
         let new_admin: AccountId = "admin2.near".parse().unwrap();
         contract.set_spender(new_spender.clone());
         assert_eq!(contract.get_spender(), &new_spender);
+        contract.set_manager(new_manager.clone());
+        assert_eq!(contract.get_manager(), &new_manager);
         contract.set_admin(new_admin.clone());
         assert_eq!(contract.get_admin(), &new_admin);
         // The old admin lost control.
@@ -55,5 +71,14 @@ mod tests {
         let mut contract = new_contract();
         testing_env!(context(spender()).build());
         contract.set_spender(spender());
+    }
+
+    #[test]
+    #[should_panic(expected = "Only the admin")]
+    fn test_set_roles_by_manager_fails() {
+        testing_env!(context(admin()).build());
+        let mut contract = new_contract();
+        testing_env!(context(manager()).build());
+        contract.set_admin(manager());
     }
 }

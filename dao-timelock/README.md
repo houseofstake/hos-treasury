@@ -8,16 +8,16 @@ A timelock contract that sits between a [Sputnik DAO](https://github.com/near-da
 - **Anyone can execute** a request once its delay has passed — it was already approved by the DAO and survived the guardian review window. A request is removed from state before the promise is created, so it can never execute twice.
 - **Optional ordering between requests.** A request may name a pending request as its `predecessor_id`; it then becomes executable only once the predecessor has been executed or cancelled. NEAR processes receipts to the same receiver in dispatch order, so at a shared receiver the predecessor's batch runs before the dependent one (use this for e.g. upgrade-then-migrate). Caveats: the predecessor's *success* is not checked; ordering across different receivers is dispatch-order only; a proposal-request predecessor is only ordered up to its `add_proposal` dispatch (the approving vote and the proposal's own effects fire later, from callbacks); cancelling a predecessor unblocks its dependents, so guardians should review those too.
 - **Any guardian can cancel** a pending request. The escrowed deposit is refunded to the funder.
-- **Config changes are admin-only.** `set_dao`, `set_admin`, `set_guardians`, and `set_delay` are only callable by the configured admin. The admin is expected to be a timelock itself — the Policy Timelock in the HoS topology, or the contract's own account for a self-administered timelock — so config changes are scheduled as requests and wait out a delay, and guardians can cancel them like any other request, including an attempt to remove the guardians.
+- **Config changes are admin-only.** `set_dao`, `set_admin`, `set_guardians`, and `set_delay` are only callable by the configured admin. The admin is expected to be a timelock itself — the Policy Timelock in the HoS topology, or the contract's own account for a self-administered timelock — so config changes are scheduled as requests and wait out a delay, and guardians can cancel them like any other request.
 - **Not upgradable by design.** There is no method to deploy new code or migrate state. To move to a new timelock, the DAO points its own workflows at a new contract; to move to a new DAO, the admin schedules `set_dao`.
 
 ## Deposit semantics
 
-`schedule` is payable and the attached deposit must exactly equal the sum of the `deposit` fields of all actions. The deposit is escrowed by the timelock:
+`schedule` is payable and the attached deposit must exactly equal the sum of the `deposit` fields of all actions; for `schedule_proposal` it must equal `proposal_bond`. The deposit is escrowed by the timelock:
 
 - On **execute**, the deposits are attached to the outgoing function calls.
 - On **cancel**, the full amount is refunded to the funder (the DAO account that scheduled the request).
-- If **execution fails** on the receiver, the whole batch reverts and NEAR's protocol-level refund returns the deposits to the timelock contract's balance (not the DAO). Keep this in mind for large deposits.
+- If **execution fails** on the receiver, the whole batch reverts and NEAR's protocol-level refund returns the deposits to the timelock contract's balance (not the DAO). Keep this in mind for large deposits. Exception: when a proposal request's `add_proposal` fails, the callback explicitly refunds the bond to the funder.
 
 The timelock should hold a small NEAR balance to cover storage for pending requests.
 
@@ -29,9 +29,9 @@ The timelock should hold a small NEAR balance to cover storage for pending reque
 2. Proposal approved → request queued with `execute_after = now + delay`.
 3. After the delay, anyone calls `timelock.near::execute {request_id}`.
 
-### DAO changes its own approvers (Sputnik policy)
+### DAO changes Sputnik signers (its own or another DAO's policy)
 
-Same as above with `receiver_id = <dao account>` and an action calling the DAO's policy-change method — the DAO's self-updates are timelocked because the DAO grants the timelock (not its members directly) the permission to make them.
+`schedule_proposal` schedules an `add_proposal` on the target `dao_id` and, in a callback, approves whatever proposal id the DAO returns — so proposals landing on the target during the delay cannot break the flow by shifting the id sequence. The target can be the DAO the timelock fronts or any other DAO — e.g. the Policy Timelock in the HoS topology changes the signers of the Execution and Payment DAOs with a single request. The target DAO's policy must grant the timelock the matching `AddProposal`/`VoteApprove` permissions (e.g. `policy:*` for `ChangePolicy` proposals), and `proposal_bond` must equal the target DAO's proposal bond — it is escrowed at schedule time (the attached deposit must equal it) and attached to the inner `add_proposal`. When a DAO targets itself, its self-updates are timelocked because the DAO grants the timelock (not its members directly) the permission to make them.
 
 ### Admin updates a timelock's guardians
 
@@ -46,8 +46,10 @@ new(dao_id: AccountId, admin_id: AccountId, guardians: Vec<AccountId>, delay_ns:
 // State-changing
 #[payable] schedule(receiver_id: AccountId, actions: Vec<FunctionCall>,
                     predecessor_id: Option<u64>) -> u64                         // DAO only
-#[payable] schedule_proposal(description: String, kind: Value, add_proposal_gas: Gas,
-                             act_proposal_gas: Gas, predecessor_id: Option<u64>) -> u64  // DAO only
+#[payable] schedule_proposal(description: String, kind: Value, dao_id: AccountId,
+                             proposal_bond: NearToken, add_proposal_gas: Gas,
+                             act_proposal_gas: Gas,
+                             predecessor_id: Option<u64>) -> u64                 // DAO only
 execute(request_id: u64) -> Promise                                            // anyone, after delay
 cancel(request_id: u64)                                                        // guardian
 
@@ -55,7 +57,7 @@ cancel(request_id: u64)                                                        /
 set_dao(dao_id: AccountId)
 set_admin(admin_id: AccountId)
 set_guardians(guardians: Vec<AccountId>)
-set_delay(delay_ns: U64)  // capped at 366 days
+set_delay(delay_ns: U64)  // capped at 30 days
 
 // Views
 get_dao() -> AccountId

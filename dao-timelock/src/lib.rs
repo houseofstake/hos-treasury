@@ -106,21 +106,27 @@ impl Contract {
         request_id
     }
 
-    /// Schedules a Sputnik proposal (`add_proposal`, then a `VoteApprove` in a callback). DAO-only.
-    /// The attached deposit is the proposal bond. Approving executes the proposal, so
-    /// `act_proposal_gas` must also cover its own action.
-    /// The optional predecessor must leave the queue before this one can execute.
+    /// Schedules a Sputnik proposal on `dao_id`: `add_proposal`, then a `VoteApprove`
+    /// in a callback; the target DAO must grant this contract the matching
+    /// AddProposal/VoteApprove permissions. `proposal_bond` must match the target
+    /// DAO's bond and equal the attached deposit; it is attached to `add_proposal`.
     #[payable]
     pub fn schedule_proposal(
         &mut self,
         description: String,
         kind: serde_json::Value,
+        dao_id: AccountId,
+        proposal_bond: NearToken,
         add_proposal_gas: Gas,
         act_proposal_gas: Gas,
         predecessor_id: Option<u64>,
     ) -> u64 {
         self.assert_dao();
         self.assert_predecessor(predecessor_id);
+        require!(
+            env::attached_deposit() == proposal_bond,
+            "Attached deposit must equal the proposal bond"
+        );
         let approval = ProposalApproval {
             kind: kind.to_string(),
             act_proposal_gas,
@@ -129,13 +135,13 @@ impl Contract {
             "proposal": { "description": description, "kind": kind }
         });
         let request = Request {
-            receiver_id: self.dao_id.clone(),
+            receiver_id: dao_id.clone(),
             actions: vec![FunctionCall {
                 method_name: "add_proposal".to_string(),
                 args: Base64VecU8::from(
                     serde_json::to_vec(&args).expect("Failed to serialize add_proposal args"),
                 ),
-                deposit: env::attached_deposit(),
+                deposit: proposal_bond,
                 gas: add_proposal_gas,
             }],
             funder_id: env::predecessor_account_id(),
@@ -149,7 +155,7 @@ impl Contract {
         );
         let execute_after = request.execute_after;
         let request_id = self.insert_request(request);
-        events::schedule_proposal(request_id, execute_after, predecessor_id);
+        events::schedule_proposal(request_id, &dao_id, execute_after, predecessor_id);
         request_id
     }
 
@@ -411,6 +417,8 @@ mod tests {
         contract.schedule_proposal(
             "change the policy".to_string(),
             policy_kind(),
+            dao(),
+            NearToken::from_yoctonear(bond),
             Gas::from_tgas(30),
             Gas::from_tgas(100),
             None,
@@ -527,6 +535,27 @@ mod tests {
     }
 
     #[test]
+    fn test_schedule_proposal_for_other_dao() {
+        testing_env!(context(dao()).build());
+        let mut contract = new_contract();
+        let other_dao: AccountId = "other-dao.near".parse().unwrap();
+        let request_id = contract.schedule_proposal(
+            "change the signers".to_string(),
+            policy_kind(),
+            other_dao.clone(),
+            NearToken::from_yoctonear(0),
+            Gas::from_tgas(30),
+            Gas::from_tgas(100),
+            None,
+        );
+        // The add_proposal call targets the given DAO, not the fronted one.
+        let request = contract.get_request(request_id).unwrap();
+        assert_eq!(request.receiver_id, other_dao);
+        assert_eq!(request.actions[0].method_name, "add_proposal");
+        assert!(request.approve.is_some());
+    }
+
+    #[test]
     #[should_panic(expected = "Only the DAO can schedule")]
     fn test_schedule_proposal_by_other_fails() {
         testing_env!(context(dao()).build());
@@ -535,6 +564,29 @@ mod tests {
         contract.schedule_proposal(
             "change the policy".to_string(),
             policy_kind(),
+            dao(),
+            NearToken::from_yoctonear(0),
+            Gas::from_tgas(30),
+            Gas::from_tgas(100),
+            None,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Attached deposit must equal the proposal bond")]
+    fn test_schedule_proposal_wrong_deposit_fails() {
+        testing_env!(context(dao()).build());
+        let mut contract = new_contract();
+        testing_env!(
+            context(dao())
+                .attached_deposit(NearToken::from_yoctonear(1))
+                .build()
+        );
+        contract.schedule_proposal(
+            "change the policy".to_string(),
+            policy_kind(),
+            dao(),
+            NearToken::from_yoctonear(7),
             Gas::from_tgas(30),
             Gas::from_tgas(100),
             None,
@@ -703,6 +755,8 @@ mod tests {
         let proposal_id = contract.schedule_proposal(
             "change the policy".to_string(),
             policy_kind(),
+            dao(),
+            NearToken::from_yoctonear(0),
             Gas::from_tgas(30),
             Gas::from_tgas(100),
             Some(first_id),

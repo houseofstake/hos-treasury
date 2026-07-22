@@ -21,26 +21,31 @@ pub const SPENDING_ACCOUNT_WASM_FILEPATH: &str = "../res/local/spending_account.
 /// A deployed treasury stack.
 ///
 /// The spending account is always deployed. When the builder is configured
-/// `with_timelocks`, a `dao-timelock` is deployed in front of each role: the
-/// admin/spender of the treasury are the timelock accounts and the DAOs act
-/// through them. Otherwise the DAO accounts hold the roles directly, which is
-/// convenient for testing the spending account in isolation.
+/// `with_timelocks`, a `dao-timelock` is deployed in front of each role — the
+/// policy/execution/payment timelocks hold the admin/manager/spender roles of
+/// the treasury and the DAOs act through them. Otherwise the DAO accounts hold
+/// the roles directly, which is convenient for testing the spending account in
+/// isolation.
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct TreasuryTestWorkspace {
     pub sandbox: Worker<Sandbox>,
     /// The spending-account contract.
     pub treasury: Account,
-    /// The account acting as the admin DAO.
-    pub admin_dao: Account,
-    /// The account acting as the spender DAO.
-    pub spender_dao: Account,
-    /// Timelock controlled by `admin_dao`, holding the treasury admin role and
-    /// the admin role of both timelocks (its own included).
-    pub admin_timelock: Option<Account>,
-    /// Timelock controlled by `spender_dao`, holding the treasury spender role.
-    pub spender_timelock: Option<Account>,
-    /// Guardian of both timelocks.
+    /// The account acting as the policy DAO (the Security Council in production).
+    pub policy_dao: Account,
+    /// The account acting as the execution DAO.
+    pub execution_dao: Account,
+    /// The account acting as the payment DAO.
+    pub payment_dao: Account,
+    /// Timelock controlled by `policy_dao`, holding the treasury admin role and
+    /// the admin role of every timelock (its own included).
+    pub policy_timelock: Option<Account>,
+    /// Timelock controlled by `execution_dao`, holding the treasury manager role.
+    pub execution_timelock: Option<Account>,
+    /// Timelock controlled by `payment_dao`, holding the treasury spender role.
+    pub payment_timelock: Option<Account>,
+    /// Guardian of every timelock.
     pub guardian: Account,
 }
 
@@ -68,19 +73,22 @@ impl TreasuryTestWorkspaceBuilder {
 
         let sandbox = near_workspaces::sandbox().await?;
 
-        let admin_dao = sandbox.dev_create_account().await?;
-        let spender_dao = sandbox.dev_create_account().await?;
+        let policy_dao = sandbox.dev_create_account().await?;
+        let execution_dao = sandbox.dev_create_account().await?;
+        let payment_dao = sandbox.dev_create_account().await?;
         let guardian = sandbox.dev_create_account().await?;
 
-        let (admin_timelock, spender_timelock) = if self.deploy_timelocks {
+        let (policy_timelock, execution_timelock, payment_timelock) = if self.deploy_timelocks {
             let timelock_wasm = std::fs::read(TIMELOCK_WASM_FILEPATH)?;
-            let admin_timelock = sandbox.dev_create_account().await?;
-            let spender_timelock = sandbox.dev_create_account().await?;
-            // The admin timelock administers every timelock, including itself:
+            let policy_timelock = sandbox.dev_create_account().await?;
+            let execution_timelock = sandbox.dev_create_account().await?;
+            let payment_timelock = sandbox.dev_create_account().await?;
+            // The policy timelock administers every timelock, including itself:
             // its own config changes go through its own scheduled requests.
             for (timelock, dao) in [
-                (&admin_timelock, &admin_dao),
-                (&spender_timelock, &spender_dao),
+                (&policy_timelock, &policy_dao),
+                (&execution_timelock, &execution_dao),
+                (&payment_timelock, &payment_dao),
             ] {
                 let outcome = timelock
                     .batch(timelock.id())
@@ -89,7 +97,7 @@ impl TreasuryTestWorkspaceBuilder {
                         Function::new("new")
                             .args_json(json!({
                                 "dao_id": dao.id(),
-                                "admin_id": admin_timelock.id(),
+                                "admin_id": policy_timelock.id(),
                                 "guardians": &[guardian.id()],
                                 "delay_ns": U64(self.delay_ns),
                             }))
@@ -103,13 +111,18 @@ impl TreasuryTestWorkspaceBuilder {
                     outcome.outcomes()
                 );
             }
-            (Some(admin_timelock), Some(spender_timelock))
+            (
+                Some(policy_timelock),
+                Some(execution_timelock),
+                Some(payment_timelock),
+            )
         } else {
-            (None, None)
+            (None, None, None)
         };
 
-        let admin_id = admin_timelock.as_ref().unwrap_or(&admin_dao).id();
-        let spender_id = spender_timelock.as_ref().unwrap_or(&spender_dao).id();
+        let admin_id = policy_timelock.as_ref().unwrap_or(&policy_dao).id();
+        let manager_id = execution_timelock.as_ref().unwrap_or(&execution_dao).id();
+        let spender_id = payment_timelock.as_ref().unwrap_or(&payment_dao).id();
 
         let treasury = sandbox.dev_create_account().await?;
         let outcome = treasury
@@ -119,6 +132,7 @@ impl TreasuryTestWorkspaceBuilder {
                 Function::new("new")
                     .args_json(json!({
                         "admin_id": admin_id,
+                        "manager_id": manager_id,
                         "spender_id": spender_id,
                     }))
                     .gas(near_sdk::Gas::from_tgas(10)),
@@ -142,10 +156,12 @@ impl TreasuryTestWorkspaceBuilder {
         let workspace = TreasuryTestWorkspace {
             sandbox,
             treasury,
-            admin_dao,
-            spender_dao,
-            admin_timelock,
-            spender_timelock,
+            policy_dao,
+            execution_dao,
+            payment_dao,
+            policy_timelock,
+            execution_timelock,
+            payment_timelock,
             guardian,
         };
 
@@ -155,6 +171,15 @@ impl TreasuryTestWorkspaceBuilder {
             .await
             .map(|v| serde_json::from_value(v).unwrap())?;
         assert_eq!(&configured_admin, workspace.admin().id(), "Invalid admin");
+        let configured_manager: near_workspaces::AccountId = workspace
+            .treasury_view("get_manager", json!({}))
+            .await
+            .map(|v| serde_json::from_value(v).unwrap())?;
+        assert_eq!(
+            &configured_manager,
+            workspace.manager().id(),
+            "Invalid manager"
+        );
         let configured_spender: near_workspaces::AccountId = workspace
             .treasury_view("get_spender", json!({}))
             .await
@@ -186,16 +211,24 @@ impl TreasuryTestWorkspaceBuilder {
 
 #[allow(dead_code)]
 impl TreasuryTestWorkspace {
-    /// The account holding the treasury admin role: the admin timelock when
-    /// deployed, otherwise the admin DAO itself.
+    /// The account holding the treasury admin role: the policy timelock when
+    /// deployed, otherwise the policy DAO itself.
     pub fn admin(&self) -> &Account {
-        self.admin_timelock.as_ref().unwrap_or(&self.admin_dao)
+        self.policy_timelock.as_ref().unwrap_or(&self.policy_dao)
     }
 
-    /// The account holding the treasury spender role: the spender timelock when
-    /// deployed, otherwise the spender DAO itself.
+    /// The account holding the treasury manager role: the execution timelock when
+    /// deployed, otherwise the execution DAO itself.
+    pub fn manager(&self) -> &Account {
+        self.execution_timelock
+            .as_ref()
+            .unwrap_or(&self.execution_dao)
+    }
+
+    /// The account holding the treasury spender role: the payment timelock when
+    /// deployed, otherwise the payment DAO itself.
     pub fn spender(&self) -> &Account {
-        self.spender_timelock.as_ref().unwrap_or(&self.spender_dao)
+        self.payment_timelock.as_ref().unwrap_or(&self.payment_dao)
     }
 
     pub async fn block_timestamp(&self) -> Result<Timestamp, Box<dyn std::error::Error>> {

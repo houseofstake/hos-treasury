@@ -11,7 +11,7 @@ impl Contract {
         token_id: Option<AccountId>,
         limit: U128,
     ) {
-        self.assert_admin();
+        self.assert_manager();
         require!(
             account_id != env::current_account_id(),
             "Cannot whitelist the contract itself"
@@ -26,7 +26,7 @@ impl Contract {
 
     /// Removes a whitelist entry.
     pub fn remove_from_whitelist(&mut self, account_id: AccountId, token_id: Option<AccountId>) {
-        self.assert_admin();
+        self.assert_manager();
         require!(
             self.whitelist.remove(&(account_id, token_id)).is_some(),
             "Account is not whitelisted"
@@ -35,7 +35,7 @@ impl Contract {
 
     /// Changes the remaining limit of a whitelist entry.
     pub fn set_limit(&mut self, account_id: AccountId, token_id: Option<AccountId>, limit: U128) {
-        self.assert_admin();
+        self.assert_manager();
         let key = (account_id, token_id);
         require!(
             self.whitelist.contains_key(&key),
@@ -51,7 +51,7 @@ impl Contract {
         token_id: Option<AccountId>,
         amount: U128,
     ) {
-        self.assert_admin();
+        self.assert_manager();
         require!(
             account_id != env::current_account_id(),
             "Cannot whitelist the contract itself"
@@ -69,7 +69,7 @@ impl Contract {
         token_id: Option<AccountId>,
         amount: U128,
     ) {
-        self.assert_admin();
+        self.assert_manager();
         let key = (account_id, token_id);
         let limit = self
             .whitelist
@@ -164,17 +164,26 @@ mod tests {
     #[test]
     #[should_panic(expected = "Cannot whitelist the contract itself")]
     fn test_add_self_fails() {
-        testing_env!(context(admin()).build());
+        testing_env!(context(manager()).build());
         let mut contract = new_contract();
         contract.add_to_whitelist(treasury(), Some(token()), U128(1));
     }
 
     #[test]
-    #[should_panic(expected = "Only the admin")]
+    #[should_panic(expected = "Only the manager")]
     fn test_add_by_spender_fails() {
-        testing_env!(context(admin()).build());
+        testing_env!(context(manager()).build());
         let mut contract = new_contract();
         testing_env!(context(spender()).build());
+        contract.add_to_whitelist(alice(), Some(token()), U128(1));
+    }
+
+    #[test]
+    #[should_panic(expected = "Only the manager")]
+    fn test_add_by_admin_fails() {
+        testing_env!(context(manager()).build());
+        let mut contract = new_contract();
+        testing_env!(context(admin()).build());
         contract.add_to_whitelist(alice(), Some(token()), U128(1));
     }
 
@@ -193,13 +202,13 @@ mod tests {
     #[test]
     #[should_panic(expected = "Account is not whitelisted")]
     fn test_remove_missing_fails() {
-        testing_env!(context(admin()).build());
+        testing_env!(context(manager()).build());
         let mut contract = new_contract();
         contract.remove_from_whitelist(alice(), Some(token()));
     }
 
     #[test]
-    #[should_panic(expected = "Only the admin")]
+    #[should_panic(expected = "Only the manager")]
     fn test_remove_by_other_fails() {
         let mut contract = contract_with_alice(LIMIT);
         testing_env!(context(alice()).build());
@@ -211,7 +220,7 @@ mod tests {
         let mut contract = contract_with_alice(LIMIT);
         testing_env!(context(spender()).build());
         contract.transfer_ft(alice(), token(), U128(30));
-        testing_env!(context(admin()).build());
+        testing_env!(context(manager()).build());
         contract.set_limit(alice(), Some(token()), U128(40));
         assert_eq!(remaining(&contract), 40);
     }
@@ -219,7 +228,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "Account is not whitelisted")]
     fn test_set_limit_missing_fails() {
-        testing_env!(context(admin()).build());
+        testing_env!(context(manager()).build());
         let mut contract = new_contract();
         contract.set_limit(alice(), Some(token()), U128(1));
     }
@@ -250,7 +259,7 @@ mod tests {
 
     #[test]
     fn test_increase_limit_creates_missing_entry() {
-        testing_env!(context(admin()).build());
+        testing_env!(context(manager()).build());
         let mut contract = new_contract();
         contract.increase_limit(alice(), Some(token()), U128(1));
         assert_eq!(remaining(&contract), 1);
@@ -259,7 +268,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "Cannot whitelist the contract itself")]
     fn test_increase_limit_self_fails() {
-        testing_env!(context(admin()).build());
+        testing_env!(context(manager()).build());
         let mut contract = new_contract();
         contract.increase_limit(treasury(), Some(token()), U128(1));
     }
@@ -267,13 +276,13 @@ mod tests {
     #[test]
     #[should_panic(expected = "Account is not whitelisted")]
     fn test_decrease_limit_missing_fails() {
-        testing_env!(context(admin()).build());
+        testing_env!(context(manager()).build());
         let mut contract = new_contract();
         contract.decrease_limit(alice(), Some(token()), U128(1));
     }
 
     #[test]
-    #[should_panic(expected = "Only the admin")]
+    #[should_panic(expected = "Only the manager")]
     fn test_increase_limit_by_spender_fails() {
         let mut contract = contract_with_alice(LIMIT);
         testing_env!(context(spender()).build());
@@ -285,7 +294,7 @@ mod tests {
         let mut contract = contract_with_alice(LIMIT);
         testing_env!(context(spender()).build());
         contract.transfer_ft(alice(), token(), U128(LIMIT));
-        testing_env!(context(admin()).build());
+        testing_env!(context(manager()).build());
         contract.remove_from_whitelist(alice(), Some(token()));
         contract.add_to_whitelist(alice(), Some(token()), U128(LIMIT));
         assert_eq!(remaining(&contract), LIMIT);

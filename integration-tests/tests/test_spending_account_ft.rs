@@ -14,7 +14,7 @@ async fn test_ft_whitelist_and_transfer() -> Result<(), Box<dyn std::error::Erro
     let limit = NearToken::from_near(10).as_yoctonear();
 
     let outcome = w
-        .add_to_ft_whitelist(&w.admin_dao, alice.id(), token.id(), limit)
+        .add_to_ft_whitelist(&w.execution_dao, alice.id(), token.id(), limit)
         .await?;
     outcome_check(&outcome);
     assert!(w.is_ft_whitelisted(alice.id(), token.id()).await?);
@@ -27,7 +27,7 @@ async fn test_ft_whitelist_and_transfer() -> Result<(), Box<dyn std::error::Erro
     let amount = NearToken::from_near(4).as_yoctonear();
     let treasury_ft_before = w.ft_balance(&token, w.treasury.id()).await?;
     let outcome = w
-        .transfer_ft(&w.spender_dao, alice.id(), token.id(), amount)
+        .transfer_ft(&w.payment_dao, alice.id(), token.id(), amount)
         .await?;
     outcome_check(&outcome);
 
@@ -41,7 +41,7 @@ async fn test_ft_whitelist_and_transfer() -> Result<(), Box<dyn std::error::Erro
 
     // Spending the exact remaining allowance is allowed.
     let outcome = w
-        .transfer_ft(&w.spender_dao, alice.id(), token.id(), remaining)
+        .transfer_ft(&w.payment_dao, alice.id(), token.id(), remaining)
         .await?;
     outcome_check(&outcome);
     assert_eq!(w.ft_balance(&token, alice.id()).await?, limit);
@@ -49,7 +49,7 @@ async fn test_ft_whitelist_and_transfer() -> Result<(), Box<dyn std::error::Erro
 
     // The allowance is exhausted.
     let outcome = w
-        .transfer_ft(&w.spender_dao, alice.id(), token.id(), 1)
+        .transfer_ft(&w.payment_dao, alice.id(), token.id(), 1)
         .await?;
     assert!(
         outcome.is_failure(),
@@ -70,12 +70,12 @@ async fn test_ft_transfer_restrictions() -> Result<(), Box<dyn std::error::Error
     w.ft_register(&token, alice.id()).await?;
     let limit = NearToken::from_near(10).as_yoctonear();
     outcome_check(
-        &w.add_to_ft_whitelist(&w.admin_dao, alice.id(), token.id(), limit)
+        &w.add_to_ft_whitelist(&w.execution_dao, alice.id(), token.id(), limit)
             .await?,
     );
 
-    // Only the spender can transfer, not the admin or the receiver.
-    for account in [&w.admin_dao, &alice] {
+    // Only the spender can transfer, not the admin, the manager or the receiver.
+    for account in [&w.policy_dao, &w.execution_dao, &alice] {
         let outcome = w.transfer_ft(account, alice.id(), token.id(), 1).await?;
         assert!(
             outcome.is_failure(),
@@ -88,11 +88,11 @@ async fn test_ft_transfer_restrictions() -> Result<(), Box<dyn std::error::Error
     // are whitelisted for NEAR.
     let bob = w.sandbox.dev_create_account().await?;
     outcome_check(
-        &w.add_to_whitelist(&w.admin_dao, bob.id(), NearToken::from_near(10))
+        &w.add_to_whitelist(&w.execution_dao, bob.id(), NearToken::from_near(10))
             .await?,
     );
     let outcome = w
-        .transfer_ft(&w.spender_dao, bob.id(), token.id(), 1)
+        .transfer_ft(&w.payment_dao, bob.id(), token.id(), 1)
         .await?;
     assert!(
         outcome.is_failure(),
@@ -102,11 +102,11 @@ async fn test_ft_transfer_restrictions() -> Result<(), Box<dyn std::error::Error
 
     // No zero transfers, no transfers over the limit.
     let outcome = w
-        .transfer_ft(&w.spender_dao, alice.id(), token.id(), 0)
+        .transfer_ft(&w.payment_dao, alice.id(), token.id(), 0)
         .await?;
     assert!(outcome.is_failure(), "Zero transfer should fail");
     let outcome = w
-        .transfer_ft(&w.spender_dao, alice.id(), token.id(), limit + 1)
+        .transfer_ft(&w.payment_dao, alice.id(), token.id(), limit + 1)
         .await?;
     assert!(outcome.is_failure(), "Transfer over the limit should fail");
 
@@ -120,7 +120,7 @@ async fn test_ft_transfer_restrictions() -> Result<(), Box<dyn std::error::Error
 }
 
 #[tokio::test]
-async fn test_ft_admin_management() -> Result<(), Box<dyn std::error::Error>> {
+async fn test_ft_manager_management() -> Result<(), Box<dyn std::error::Error>> {
     let w = TreasuryTestWorkspaceBuilder::default().build().await?;
     let token = w
         .deploy_ft_and_fund_treasury(NearToken::from_near(20))
@@ -129,30 +129,30 @@ async fn test_ft_admin_management() -> Result<(), Box<dyn std::error::Error>> {
     w.ft_register(&token, alice.id()).await?;
     let limit = NearToken::from_near(10).as_yoctonear();
 
-    // Only the admin manages the FT whitelist.
-    for account in [&w.spender_dao, &alice] {
+    // Only the manager manages the FT whitelist.
+    for account in [&w.policy_dao, &w.payment_dao, &alice] {
         let outcome = w
             .add_to_ft_whitelist(account, alice.id(), token.id(), limit)
             .await?;
         assert!(
             outcome.is_failure(),
-            "Whitelisting by non-admin should fail: {:#?}",
+            "Whitelisting by non-manager should fail: {:#?}",
             outcome.outcomes()
         );
     }
 
     outcome_check(
-        &w.add_to_ft_whitelist(&w.admin_dao, alice.id(), token.id(), limit)
+        &w.add_to_ft_whitelist(&w.execution_dao, alice.id(), token.id(), limit)
             .await?,
     );
 
     // No duplicates, no whitelisting the treasury itself.
     let outcome = w
-        .add_to_ft_whitelist(&w.admin_dao, alice.id(), token.id(), limit)
+        .add_to_ft_whitelist(&w.execution_dao, alice.id(), token.id(), limit)
         .await?;
     assert!(outcome.is_failure(), "Duplicate whitelisting should fail");
     let outcome = w
-        .add_to_ft_whitelist(&w.admin_dao, w.treasury.id(), token.id(), limit)
+        .add_to_ft_whitelist(&w.execution_dao, w.treasury.id(), token.id(), limit)
         .await?;
     assert!(
         outcome.is_failure(),
@@ -162,7 +162,7 @@ async fn test_ft_admin_management() -> Result<(), Box<dyn std::error::Error>> {
     // `set_limit` overrides the remaining allowance.
     outcome_check(
         &w.transfer_ft(
-            &w.spender_dao,
+            &w.payment_dao,
             alice.id(),
             token.id(),
             NearToken::from_near(4).as_yoctonear(),
@@ -171,7 +171,7 @@ async fn test_ft_admin_management() -> Result<(), Box<dyn std::error::Error>> {
     );
     outcome_check(
         &w.set_ft_limit(
-            &w.admin_dao,
+            &w.execution_dao,
             alice.id(),
             token.id(),
             NearToken::from_near(3).as_yoctonear(),
@@ -185,12 +185,12 @@ async fn test_ft_admin_management() -> Result<(), Box<dyn std::error::Error>> {
 
     // Removal revokes the allowance entirely.
     outcome_check(
-        &w.remove_from_ft_whitelist(&w.admin_dao, alice.id(), token.id())
+        &w.remove_from_ft_whitelist(&w.execution_dao, alice.id(), token.id())
             .await?,
     );
     assert!(!w.is_ft_whitelisted(alice.id(), token.id()).await?);
     let outcome = w
-        .transfer_ft(&w.spender_dao, alice.id(), token.id(), 1)
+        .transfer_ft(&w.payment_dao, alice.id(), token.id(), 1)
         .await?;
     assert!(
         outcome.is_failure(),
@@ -212,14 +212,14 @@ async fn test_ft_failed_transfer_rolls_back_allowance() -> Result<(), Box<dyn st
     let bob = w.sandbox.dev_create_account().await?;
     let limit = NearToken::from_near(10).as_yoctonear();
     outcome_check(
-        &w.add_to_ft_whitelist(&w.admin_dao, bob.id(), token.id(), limit)
+        &w.add_to_ft_whitelist(&w.execution_dao, bob.id(), token.id(), limit)
             .await?,
     );
 
     let treasury_ft_before = w.ft_balance(&token, w.treasury.id()).await?;
     let outcome = w
         .transfer_ft(
-            &w.spender_dao,
+            &w.payment_dao,
             bob.id(),
             token.id(),
             NearToken::from_near(4).as_yoctonear(),

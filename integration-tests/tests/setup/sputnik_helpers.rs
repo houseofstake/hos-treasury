@@ -100,9 +100,10 @@ pub fn change_policy_kind(new_policy: &serde_json::Value) -> serde_json::Value {
 }
 
 /// The council-facing `FunctionCall` proposal kind that asks the timelock to
-/// schedule an inner proposal on the DAO. Once the scheduled request is
-/// executed, the timelock adds the proposal and approves whatever id the DAO
-/// assigned to it with its own vote.
+/// schedule an inner proposal on `dao_id`: the DAO the timelock fronts, or
+/// another DAO whose policy grants the timelock the proposal permissions.
+/// Once the scheduled request is executed, the timelock adds the proposal and
+/// approves whatever id the DAO assigned to it with its own vote.
 ///
 /// The action deposit equals the proposal bond: the DAO escrows it in the
 /// timelock at schedule time and the timelock attaches it as the bond of the
@@ -110,12 +111,15 @@ pub fn change_policy_kind(new_policy: &serde_json::Value) -> serde_json::Value {
 #[allow(dead_code)]
 pub fn schedule_proposal_kind(
     timelock_id: &AccountId,
+    dao_id: &AccountId,
     inner_kind: &serde_json::Value,
     proposal_bond: NearToken,
 ) -> serde_json::Value {
     let schedule_args = json!({
         "description": "Scheduled policy change",
         "kind": inner_kind,
+        "dao_id": dao_id,
+        "proposal_bond": proposal_bond,
         "add_proposal_gas": Gas::from_tgas(50),
         "act_proposal_gas": Gas::from_tgas(100),
     });
@@ -132,14 +136,53 @@ pub fn schedule_proposal_kind(
     })
 }
 
-/// `schedule_proposal_kind` for a `ChangePolicy` inner proposal.
+/// `schedule_proposal_kind` for a `ChangePolicy` inner proposal on `dao_id`.
 #[allow(dead_code)]
 pub fn schedule_policy_change_kind(
     timelock_id: &AccountId,
+    dao_id: &AccountId,
     new_policy: &serde_json::Value,
     proposal_bond: NearToken,
 ) -> serde_json::Value {
-    schedule_proposal_kind(timelock_id, &change_policy_kind(new_policy), proposal_bond)
+    schedule_proposal_kind(
+        timelock_id,
+        dao_id,
+        &change_policy_kind(new_policy),
+        proposal_bond,
+    )
+}
+
+/// Deploys `res/sputnikdao2.wasm` onto `dao` and initializes it with `policy`.
+#[allow(dead_code)]
+pub async fn deploy_sputnik_dao(
+    dao: &Account,
+    name: &str,
+    policy: &serde_json::Value,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let sputnik_wasm = std::fs::read(SPUTNIK_WASM_FILEPATH)?;
+    let outcome = dao
+        .batch(dao.id())
+        .deploy(&sputnik_wasm)
+        .call(
+            Function::new("new")
+                .args_json(json!({
+                    "config": {
+                        "name": name,
+                        "purpose": "hos-treasury integration tests",
+                        "metadata": "",
+                    },
+                    "policy": policy,
+                }))
+                .gas(Gas::from_tgas(100)),
+        )
+        .transact()
+        .await?;
+    assert!(
+        outcome.is_success(),
+        "Failed to deploy sputnikdao2: {:#?}",
+        outcome.outcomes()
+    );
+    Ok(())
 }
 
 /// Deploys the timelock (with the DAO as `dao_id`) and the SputnikDAO (with the
@@ -179,29 +222,12 @@ pub async fn setup_sputnik_workspace()
         outcome.outcomes()
     );
 
-    let sputnik_wasm = std::fs::read(SPUTNIK_WASM_FILEPATH)?;
-    let outcome = dao
-        .batch(dao.id())
-        .deploy(&sputnik_wasm)
-        .call(
-            Function::new("new")
-                .args_json(json!({
-                    "config": {
-                        "name": "treasury-dao",
-                        "purpose": "hos-treasury integration tests",
-                        "metadata": "",
-                    },
-                    "policy": dao_policy(&council, timelock.id(), PROPOSAL_BOND),
-                }))
-                .gas(Gas::from_tgas(100)),
-        )
-        .transact()
-        .await?;
-    assert!(
-        outcome.is_success(),
-        "Failed to deploy sputnikdao2: {:#?}",
-        outcome.outcomes()
-    );
+    deploy_sputnik_dao(
+        &dao,
+        "treasury-dao",
+        &dao_policy(&council, timelock.id(), PROPOSAL_BOND),
+    )
+    .await?;
 
     Ok(SputnikTimelockWorkspace {
         sandbox,
@@ -391,7 +417,8 @@ impl SputnikTimelockWorkspace {
         &self,
         inner_kind: &serde_json::Value,
     ) -> Result<u64, Box<dyn std::error::Error>> {
-        let outer_kind = schedule_proposal_kind(self.timelock.id(), inner_kind, PROPOSAL_BOND);
+        let outer_kind =
+            schedule_proposal_kind(self.timelock.id(), self.dao.id(), inner_kind, PROPOSAL_BOND);
 
         let proposal_id = self
             .add_proposal(&self.council[0], &outer_kind, PROPOSAL_BOND)

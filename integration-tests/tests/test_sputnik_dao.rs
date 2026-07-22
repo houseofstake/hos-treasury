@@ -22,7 +22,8 @@ async fn test_council_2_of_3_upgrades_policy_through_timelock()
     // through the timelock: the timelock will add the ChangePolicy proposal
     // and approve whatever id the DAO assigns to it.
     let outer_id = w.get_last_proposal_id().await?;
-    let outer_kind = schedule_policy_change_kind(w.timelock.id(), &new_policy, PROPOSAL_BOND);
+    let outer_kind =
+        schedule_policy_change_kind(w.timelock.id(), w.dao.id(), &new_policy, PROPOSAL_BOND);
     let proposal_id = w
         .add_proposal(&w.council[0], &outer_kind, PROPOSAL_BOND)
         .await?;

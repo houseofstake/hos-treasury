@@ -2,16 +2,24 @@
 #
 # Deploys the full HoS treasury topology to mainnet:
 #
-#   Policy DAO ----------> Policy Timelock ----- admin of every timelock ----+
-#                          (policy-tl.<parent>)  (its own included), of both |
-#                                                spending accounts, and sole |
-#                                                policy-changer of all DAOs  |
-#                                                                            v
-#   Execution DAO -------> Execution Timelock SWF ---- spender ----> SWF (swf.<parent>)
-#                          (exec-swf-tl.<parent>)                        | whitelisted
-#                                                                        v
-#   Payment DAO ---------> Execution Timelock SSA ---- spender ----> SSA (ssa.<parent>)
+#   Security Council ----> Policy Timelock ----- admin of every timelock -----+
+#   (existing DAO)         (policy-tl.<parent>)  (its own included), role     |
+#                                                admin of both spending       |
+#                                                accounts, and policy-changer |
+#                                                of the Execution and         |
+#                                                Payment DAOs                 |
+#                                                                             v
+#   Execution DAO -------> Execution Timelock ------- spender+manager -> SWF (swf.<parent>)
+#                          (exec-swf-tl.<parent>)      manager of the SSA | whitelisted
+#                                                                         v
+#   Payment DAO ---------> Payment Timelock --------- spender --------> SSA (ssa.<parent>)
 #                          (exec-ssa-tl.<parent>)
+#
+# The Execution DAO (through the Execution Timelock) is the manager of
+# both spending accounts: it changes the whitelists and spending limits. The
+# Security Council (through the Policy Timelock) only assigns the roles. The
+# council's own Sputnik policy is NOT fronted by a timelock: the council
+# upgrades it directly.
 #
 # Modes (identical except where the DAOs come from):
 #   staging     The three DAOs are deployed by this script from
@@ -19,11 +27,13 @@
 #               with a 1-of-1 council (the parent).
 #   production  The DAOs are NOT created by this script: they must already
 #               exist (created by their communities, e.g. via the SputnikDAO
-#               factory) and be passed in as POLICY_DAO / EXEC_DAO /
-#               PAYMENT_DAO. Their policies MUST grant the "policy:*"
-#               permissions to the Policy Timelock and to no one else, and
-#               the parent must be able to add and approve proposals on the
-#               Policy DAO for the whitelisting bootstrap below to work.
+#               factory) and be passed in as COUNCIL_DAO / EXEC_DAO /
+#               PAYMENT_DAO. The Execution and Payment DAO policies MUST
+#               grant the "policy:*" permissions to the Policy Timelock and
+#               to no one else; the Security Council DAO keeps its policy
+#               self-governed (no timelock). The parent must be able to add
+#               and approve proposals on the Execution DAO for the
+#               whitelisting bootstrap below to work.
 #
 # In both modes every created account keeps a full-access key, so the whole
 # deployment can be deleted and its NEAR recovered, and the SSA is
@@ -32,7 +42,7 @@
 #
 # Usage:
 #   scripts/deploy-mainnet-test.sh staging <parent-account.near>
-#   POLICY_DAO=... EXEC_DAO=... PAYMENT_DAO=... \
+#   COUNCIL_DAO=... EXEC_DAO=... PAYMENT_DAO=... \
 #     scripts/deploy-mainnet-test.sh production <parent-account.near>
 #
 # Production deviations handled OUTSIDE this script:
@@ -61,8 +71,6 @@ TIMELOCK_BALANCE="${TIMELOCK_BALANCE:-2.5 NEAR}"   # ~202K release wasm => ~2.1 
 SPENDING_BALANCE="${SPENDING_BALANCE:-2 NEAR}"     # ~157K release wasm => ~1.6 NEAR storage
 SWF_FUNDING="${SWF_FUNDING:-2 NEAR}"         # treasury funds on top of storage
 
-PROPOSAL_BOND="0.1 NEAR"
-PROPOSAL_BOND_YOCTO="100000000000000000000000"
 SSA_LIMIT_YOCTO="${SSA_LIMIT_YOCTO:-1000000000000000000000000}"  # 1 NEAR
 
 # optional: also whitelist a payout recipient in the SSA.
@@ -87,12 +95,12 @@ POLICY_TL="policy-tl.$PARENT"
 EXEC_SWF_TL="exec-swf-tl.$PARENT"
 EXEC_SSA_TL="exec-ssa-tl.$PARENT"
 if [[ "$MODE" == "staging" ]]; then
-  POLICY_DAO="policy-dao.$PARENT"
+  COUNCIL_DAO="council-dao.$PARENT"
   EXEC_DAO="exec-dao.$PARENT"
   PAYMENT_DAO="payment-dao.$PARENT"
 else
-  dao_usage="production mode requires existing DAO accounts: POLICY_DAO=... EXEC_DAO=... PAYMENT_DAO=... $0 production $PARENT"
-  POLICY_DAO="${POLICY_DAO:?$dao_usage}"
+  dao_usage="production mode requires existing DAO accounts: COUNCIL_DAO=... EXEC_DAO=... PAYMENT_DAO=... $0 production $PARENT"
+  COUNCIL_DAO="${COUNCIL_DAO:?$dao_usage}"
   EXEC_DAO="${EXEC_DAO:?$dao_usage}"
   PAYMENT_DAO="${PAYMENT_DAO:?$dao_usage}"
 fi
@@ -110,6 +118,11 @@ delay_human() { # renders DELAY_NS as "Xd Xh Xm Xs"
 dao_roles() { # <dao> — prints the role names and member groups of the DAO policy
   view "$1" get_policy '{}' | tr -d '\n ' \
     | grep -o '"name":"[^"]*"\|"Group":\[[^]]*\]' || true
+}
+
+dao_bond() { # <dao> — prints the proposal bond of the DAO policy, in yoctoNEAR
+  view "$1" get_policy '{}' | tr -d '\n ' \
+    | grep -o '"proposal_bond":"[0-9]*"' | grep -o '[0-9]\+'
 }
 
 view() { # <contract> <method> <json-args>
@@ -142,14 +155,41 @@ deploy_contract() { # <account-id> <wasm-path> <init-json-args>
     network-config "$NETWORK" "$SIGN_WITH" send
 }
 
-# The staging DAO policy, with a 1-of-1 council: the parent can add and vote
-# FunctionCall proposals, and — staging convenience — change the DAO policies
-# directly, with no timelock delay. The Policy Timelock also holds the
-# "policy:*" permissions so the production governance path can be exercised:
-# the Policy DAO changes its own policy via schedule_proposal and the other
-# DAOs' via scheduled add_proposal + act_proposal calls. In production only
-# the Policy Timelock may hold these permissions (see the checklist).
-dao_policy() {
+# The staging DAO policies, each with a 1-of-1 council: the parent can add and
+# vote FunctionCall proposals, and — staging convenience — change the DAO
+# policies directly, with no timelock delay.
+#
+# The Security Council DAO self-governs its policy: no timelock role, the
+# council members hold the "policy:*" permissions directly. The Execution and
+# Payment DAOs instead grant "policy:*" to the Policy Timelock so the
+# production governance path can be exercised (the Security Council changes
+# their signers via schedule_proposal requests with dao_id set to the target
+# DAO); in production only the Policy Timelock may hold these permissions on
+# them (see the checklist).
+council_dao_policy() {
+  cat <<EOF
+{
+  "roles": [
+    {
+      "name": "council",
+      "kind": { "Group": ["$PARENT"] },
+      "permissions": [
+        "call:AddProposal", "call:VoteApprove", "call:VoteReject", "call:VoteRemove",
+        "policy:AddProposal", "policy:VoteApprove", "policy:VoteReject", "policy:VoteRemove"
+      ],
+      "vote_policy": {}
+    }
+  ],
+  "default_vote_policy": { "weight_kind": "RoleWeight", "quorum": "0", "threshold": [1, 2] },
+  "proposal_bond": "100000000000000000000000",
+  "proposal_period": "604800000000000",
+  "bounty_bond": "100000000000000000000000",
+  "bounty_forgiveness_period": "86400000000000"
+}
+EOF
+}
+
+governed_dao_policy() {
   cat <<EOF
 {
   "roles": [
@@ -170,19 +210,19 @@ dao_policy() {
     }
   ],
   "default_vote_policy": { "weight_kind": "RoleWeight", "quorum": "0", "threshold": [1, 2] },
-  "proposal_bond": "$PROPOSAL_BOND_YOCTO",
+  "proposal_bond": "100000000000000000000000",
   "proposal_period": "604800000000000",
-  "bounty_bond": "$PROPOSAL_BOND_YOCTO",
+  "bounty_bond": "100000000000000000000000",
   "bounty_forgiveness_period": "86400000000000"
 }
 EOF
 }
 
 # staging only: deploys res/sputnikdao2.wasm onto a keyed subaccount.
-create_dao() { # <dao-account-id>
+create_dao() { # <dao-account-id> <policy-json>
   create_subaccount "$1" "$DAO_BALANCE"
   deploy_contract "$1" "$SPUTNIK_WASM" \
-    "{\"config\":{\"name\":\"${1%%.*}\",\"purpose\":\"HoS treasury\",\"metadata\":\"\"},\"policy\":$(dao_policy | tr -d '\n ')}"
+    "{\"config\":{\"name\":\"${1%%.*}\",\"purpose\":\"HoS treasury\",\"metadata\":\"\"},\"policy\":$(tr -d '\n ' <<<"$2")}"
 }
 
 # The canonical governance path: the council (the parent) proposes a
@@ -191,18 +231,19 @@ create_dao() { # <dao-account-id>
 # schedules the request), waits out the delay and executes the request.
 dao_action() { # <dao> <timelock> <target> <method> <json-args> <deposit-yocto> <tgas>
   local dao="$1" timelock="$2" target="$3" method="$4" args="$5" deposit="$6" tgas="$7"
-  local schedule_args kind proposal_id request_id
+  local schedule_args kind proposal_id request_id bond
 
   schedule_args=$(b64 "{\"receiver_id\":\"$target\",\"actions\":[{\"method_name\":\"$method\",\"args\":\"$(b64 "$args")\",\"deposit\":\"$deposit\",\"gas\":${tgas}000000000000}]}")
   kind="{\"FunctionCall\":{\"receiver_id\":\"$timelock\",\"actions\":[{\"method_name\":\"schedule\",\"args\":\"$schedule_args\",\"deposit\":\"$deposit\",\"gas\":50000000000000}]}}"
 
   proposal_id=$(view_scalar "$dao" get_last_proposal_id '{}')
   request_id=$(view_scalar "$timelock" get_next_request_id '{}')
+  bond=$(dao_bond "$dao")
 
-  say "Proposal $proposal_id on $dao: $target.$method via $timelock (request $request_id)"
+  say "Proposal $proposal_id on $dao: $target.$method via $timelock (request $request_id, bond $bond yoctoNEAR)"
   call "$dao" add_proposal \
     "{\"proposal\":{\"description\":\"$method on $target\",\"kind\":$kind}}" \
-    "$PROPOSAL_BOND" '100.0 Tgas'
+    "$bond yoctoNEAR" '100.0 Tgas'
 
   # The "proposal" field is required by sputnikdao v2.3.1+ and ignored by
   # older versions, so it is safe to always send it.
@@ -232,28 +273,31 @@ git merge-base --is-ancestor HEAD "@{upstream}" 2>/dev/null ||
 
 cat <<EOF
 Deploying HoS treasury topology as $PARENT on $NETWORK ($MODE mode):
-  Policy DAO:              $POLICY_DAO
+  Security Council DAO:    $COUNCIL_DAO
   Execution DAO:           $EXEC_DAO
   Payment DAO:             $PAYMENT_DAO
   Policy Timelock:         $POLICY_TL
-  Execution Timelock SWF:  $EXEC_SWF_TL
-  Execution Timelock SSA:  $EXEC_SSA_TL
+  Execution Timelock:      $EXEC_SWF_TL
+  Payment Timelock:        $EXEC_SSA_TL
   SWF (spending-account):  $SWF
   SSA (spending-account):  $SSA
   Timelock admin:          $POLICY_TL
+  Spending manager:        $EXEC_SWF_TL (whitelists and limits of SWF and SSA)
   Guardians:               $GUARDIANS
   Timelock delay:          $DELAY_NS ns ($(delay_human))
 EOF
 if [[ "$MODE" == "staging" ]]; then
   cat <<EOF
-  DAO roles (identical in all three DAOs created by this script):
-    council:  $PARENT (1-of-1, call:* and policy:* permissions)
-    timelock: $POLICY_TL (policy:AddProposal + policy:VoteApprove)
+  DAO roles created by this script:
+    council:  $PARENT (1-of-1, call:* and policy:* permissions, all DAOs)
+    timelock: $POLICY_TL (policy:AddProposal + policy:VoteApprove,
+              Execution and Payment DAOs only — the Security Council DAO
+              self-governs its policy)
 EOF
 else
   # The DAOs already exist: show who actually controls them before deploying.
   echo "Existing DAO policies (roles and members):"
-  for dao in "$POLICY_DAO" "$EXEC_DAO" "$PAYMENT_DAO"; do
+  for dao in "$COUNCIL_DAO" "$EXEC_DAO" "$PAYMENT_DAO"; do
     echo "  $dao:"
     dao_roles "$dao" | sed 's/^/    /'
   done
@@ -266,17 +310,17 @@ read -r -p "Continue? [y/N] " reply
 # of each timelock.
 if [[ "$MODE" == "staging" ]]; then
   say "Deploying the three DAOs (sputnikdao2 v2.3.1, $DAO_BALANCE each, recoverable)"
-  create_dao "$POLICY_DAO"
-  create_dao "$EXEC_DAO"
-  create_dao "$PAYMENT_DAO"
+  create_dao "$COUNCIL_DAO" "$(council_dao_policy)"
+  create_dao "$EXEC_DAO" "$(governed_dao_policy)"
+  create_dao "$PAYMENT_DAO" "$(governed_dao_policy)"
 fi
 
 # ------------------------------------------------------------- timelocks ----
 # The Policy Timelock is the admin of every timelock, its own included: config
 # changes (set_dao, set_admin, set_guardians, set_delay) must be scheduled on
-# the Policy Timelock by the Policy DAO and wait out its delay.
+# the Policy Timelock by the Security Council and wait out its delay.
 say "Deploying the three dao-timelocks (admin: $POLICY_TL, guardians: $GUARDIANS, delay: ${DELAY_NS}ns)"
-for pair in "$POLICY_TL:$POLICY_DAO" "$EXEC_SWF_TL:$EXEC_DAO" "$EXEC_SSA_TL:$PAYMENT_DAO"; do
+for pair in "$POLICY_TL:$COUNCIL_DAO" "$EXEC_SWF_TL:$EXEC_DAO" "$EXEC_SSA_TL:$PAYMENT_DAO"; do
   timelock="${pair%%:*}"
   dao="${pair#*:}"
   create_subaccount "$timelock" "$TIMELOCK_BALANCE"
@@ -285,28 +329,32 @@ for pair in "$POLICY_TL:$POLICY_DAO" "$EXEC_SWF_TL:$EXEC_DAO" "$EXEC_SSA_TL:$PAY
 done
 
 # ------------------------------------------------------ spending accounts ---
+# The Execution DAO (through its timelock) manages the whitelists and limits
+# of both spending accounts; the Policy Timelock only assigns the roles.
 say "Deploying the SWF and SSA spending accounts"
 create_subaccount "$SWF" "$SPENDING_BALANCE"
 deploy_contract "$SWF" "$SPENDING_WASM" \
-  "{\"admin_id\":\"$POLICY_TL\",\"spender_id\":\"$EXEC_SWF_TL\"}"
+  "{\"admin_id\":\"$POLICY_TL\",\"manager_id\":\"$EXEC_SWF_TL\",\"spender_id\":\"$EXEC_SWF_TL\"}"
 create_subaccount "$SSA" "$SPENDING_BALANCE"
 deploy_contract "$SSA" "$SPENDING_WASM" \
-  "{\"admin_id\":\"$POLICY_TL\",\"spender_id\":\"$EXEC_SSA_TL\"}"
+  "{\"admin_id\":\"$POLICY_TL\",\"manager_id\":\"$EXEC_SWF_TL\",\"spender_id\":\"$EXEC_SSA_TL\"}"
 
 say "Funding the SWF treasury with $SWF_FUNDING"
 near tokens "$PARENT" send-near "$SWF" "$SWF_FUNDING" \
   network-config "$NETWORK" "$SIGN_WITH" send
 
 # -------------------------------------------------------------- bootstrap ---
-# The parent drives the governance path itself, so it must be able to add and
-# approve proposals on the Policy DAO (in staging it is the 1-of-1 council).
-say "Whitelisting the SSA in the SWF through the Policy DAO + Policy Timelock"
-dao_action "$POLICY_DAO" "$POLICY_TL" "$SWF" add_to_whitelist \
+# Whitelists and limits are managed by the Execution DAO through the Execution
+# Timelock SWF. The parent drives the governance path itself, so it must be
+# able to add and approve proposals on the Execution DAO (in staging it is the
+# 1-of-1 council).
+say "Whitelisting the SSA in the SWF through the Execution DAO + Execution Timelock"
+dao_action "$EXEC_DAO" "$EXEC_SWF_TL" "$SWF" add_to_whitelist \
   "{\"account_id\":\"$SSA\",\"token_id\":null,\"limit\":\"$SSA_LIMIT_YOCTO\"}" 0 30
 
 if [[ -n "$RECIPIENT" ]]; then
-  say "Whitelisting $RECIPIENT in the SSA through the Policy DAO + Policy Timelock"
-  dao_action "$POLICY_DAO" "$POLICY_TL" "$SSA" add_to_whitelist \
+  say "Whitelisting $RECIPIENT in the SSA through the Execution DAO + Execution Timelock"
+  dao_action "$EXEC_DAO" "$EXEC_SWF_TL" "$SSA" add_to_whitelist \
     "{\"account_id\":\"$RECIPIENT\",\"token_id\":null,\"limit\":\"$RECIPIENT_LIMIT_YOCTO\"}" 0 30
 fi
 
@@ -314,15 +362,17 @@ fi
 say "Verifying the deployed configuration"
 for sa in "$SWF" "$SSA"; do
   echo "$sa admin:   $(view_scalar "$sa" get_admin '{}')"
+  echo "$sa manager: $(view_scalar "$sa" get_manager '{}')"
   echo "$sa spender: $(view_scalar "$sa" get_spender '{}')"
 done
 for timelock in "$POLICY_TL" "$EXEC_SWF_TL" "$EXEC_SSA_TL"; do
   echo "$timelock dao:   $(view_scalar "$timelock" get_dao '{}')"
   echo "$timelock admin: $(view_scalar "$timelock" get_admin '{}')"
 done
-# The "timelock" role of every DAO policy must contain only the Policy
-# Timelock: it is the sole account allowed to change the DAO policies.
-for dao in "$POLICY_DAO" "$EXEC_DAO" "$PAYMENT_DAO"; do
+# The "timelock" role of the Execution and Payment DAO policies must contain
+# only the Policy Timelock: it is the sole account allowed to change their
+# policies. The Security Council DAO self-governs its policy.
+for dao in "$COUNCIL_DAO" "$EXEC_DAO" "$PAYMENT_DAO"; do
   echo "$dao policy roles:"
   dao_roles "$dao"
 done
@@ -344,10 +394,12 @@ Cleanup:
   near account delete-account <subaccount> beneficiary $PARENT \\
     network-config $NETWORK $SIGN_WITH send
 Hardening (production):
-  1. Verify the policy of every DAO ($POLICY_DAO, $EXEC_DAO, $PAYMENT_DAO):
-     the "policy:*" permissions must be granted to $POLICY_TL and to no other
-     role, so that only the Policy DAO (through the Policy Timelock and its
-     delay) can change any DAO policy.
+  1. Verify the DAO policies: on $EXEC_DAO and $PAYMENT_DAO the "policy:*"
+     permissions must be granted to $POLICY_TL and to no other role, so that
+     only the Security Council (through the Policy Timelock and its delay)
+     can change their policies. On $COUNCIL_DAO the council members keep the
+     "policy:*" permissions themselves: the council's self-upgrades are not
+     timelocked.
   2. Fund the SWF with the real treasury balance.
   3. After verifying everything, remove the full-access keys from
      $SWF, $SSA, $POLICY_TL, $EXEC_SWF_TL, $EXEC_SSA_TL:

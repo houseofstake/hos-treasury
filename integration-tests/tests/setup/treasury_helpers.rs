@@ -1,5 +1,5 @@
 //! Helpers for calling and viewing the `spending-account` contract directly
-//! (as whichever account holds the admin/spender role).
+//! (as whichever account holds the admin/manager/spender role).
 
 use crate::setup::TreasuryTestWorkspace;
 use near_sdk::NearToken;

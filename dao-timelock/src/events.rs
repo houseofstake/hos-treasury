@@ -27,11 +27,17 @@ pub(crate) fn schedule(request_id: u64, execute_after: U64, predecessor_id: Opti
     );
 }
 
-pub(crate) fn schedule_proposal(request_id: u64, execute_after: U64, predecessor_id: Option<u64>) {
+pub(crate) fn schedule_proposal(
+    request_id: u64,
+    dao_id: &AccountId,
+    execute_after: U64,
+    predecessor_id: Option<u64>,
+) {
     emit_event(
         "schedule_proposal",
         serde_json::json!({
             "request_id": request_id,
+            "dao_id": dao_id,
             "execute_after": execute_after,
             "predecessor_id": predecessor_id,
         }),

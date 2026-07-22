@@ -173,7 +173,10 @@ impl TreasuryTestWorkspace {
         account_id: &AccountId,
         token_id: &AccountId,
     ) -> Result<bool, Box<dyn std::error::Error>> {
-        Ok(!self.ft_whitelist_entry(account_id, token_id).await?.is_null())
+        Ok(!self
+            .ft_whitelist_entry(account_id, token_id)
+            .await?
+            .is_null())
     }
 
     pub async fn ft_whitelist_entry(

@@ -3,8 +3,9 @@
 //! A treasury that pays out NEAR and NEP-141 tokens (see [`transfer`]) only to
 //! whitelisted recipients, each capped by a non-expiring spending limit. The
 //! **spender** can only transfer within an entry's remaining allowance; the
-//! **admin** manages the whitelist, limits and roles but cannot transfer.
-//! Both are expected to be Sputnik DAOs acting through their own `dao-timelock`.
+//! **manager** manages the whitelist and limits; the **admin** only assigns
+//! the roles. All three are expected to be Sputnik DAOs acting through their
+//! own `dao-timelock`.
 //! Failed transfers are rolled back by a callback and do not consume the
 //! allowance. Intentionally NOT upgradable: no method deploys code or migrates
 //! state.
@@ -48,7 +49,9 @@ pub struct WhitelistEntry {
 pub struct Contract {
     /// The only account allowed to transfer funds.
     spender_id: AccountId,
-    /// The only account allowed to manage the whitelist, limits and roles.
+    /// The only account allowed to manage the whitelist and limits.
+    manager_id: AccountId,
+    /// The only account allowed to assign the roles.
     admin_id: AccountId,
     /// Whitelisted (recipient, token) pairs and their remaining limits.
     whitelist: IterableMap<WhitelistKey, u128>,
@@ -58,9 +61,10 @@ pub struct Contract {
 impl Contract {
     /// Initializes the contract.
     #[init]
-    pub fn new(admin_id: AccountId, spender_id: AccountId) -> Self {
+    pub fn new(admin_id: AccountId, manager_id: AccountId, spender_id: AccountId) -> Self {
         Self {
             spender_id,
+            manager_id,
             admin_id,
             whitelist: IterableMap::new(StorageKey::Whitelist),
         }
@@ -68,6 +72,10 @@ impl Contract {
 
     pub fn get_spender(&self) -> &AccountId {
         &self.spender_id
+    }
+
+    pub fn get_manager(&self) -> &AccountId {
+        &self.manager_id
     }
 
     pub fn get_admin(&self) -> &AccountId {

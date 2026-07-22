@@ -24,7 +24,9 @@ async fn test_whitelist_and_transfer() -> Result<(), Box<dyn std::error::Error>>
     let alice = w.sandbox.dev_create_account().await?;
     let limit = NearToken::from_near(10);
 
-    let outcome = w.add_to_whitelist(&w.admin_dao, alice.id(), limit).await?;
+    let outcome = w
+        .add_to_whitelist(&w.execution_dao, alice.id(), limit)
+        .await?;
     outcome_check(&outcome);
     assert!(w.is_whitelisted(alice.id()).await?);
     assert_eq!(w.get_num_whitelisted().await?, 1);
@@ -34,7 +36,7 @@ async fn test_whitelist_and_transfer() -> Result<(), Box<dyn std::error::Error>>
     let amount = NearToken::from_near(4);
     let alice_before = w.balance(&alice).await?;
     let treasury_before = w.balance(&w.treasury).await?;
-    let outcome = w.transfer(&w.spender_dao, alice.id(), amount).await?;
+    let outcome = w.transfer(&w.payment_dao, alice.id(), amount).await?;
     outcome_check(&outcome);
 
     let alice_after = w.balance(&alice).await?;
@@ -53,7 +55,7 @@ async fn test_whitelist_and_transfer() -> Result<(), Box<dyn std::error::Error>>
     assert_eq!(remaining, limit.saturating_sub(amount));
 
     // Spending the exact remaining allowance is allowed.
-    let outcome = w.transfer(&w.spender_dao, alice.id(), remaining).await?;
+    let outcome = w.transfer(&w.payment_dao, alice.id(), remaining).await?;
     outcome_check(&outcome);
     assert_eq!(
         w.remaining_limit(alice.id()).await?,
@@ -62,7 +64,7 @@ async fn test_whitelist_and_transfer() -> Result<(), Box<dyn std::error::Error>>
 
     // The allowance is exhausted.
     let outcome = w
-        .transfer(&w.spender_dao, alice.id(), NearToken::from_yoctonear(1))
+        .transfer(&w.payment_dao, alice.id(), NearToken::from_yoctonear(1))
         .await?;
     assert!(
         outcome.is_failure(),
@@ -78,10 +80,13 @@ async fn test_transfer_restrictions() -> Result<(), Box<dyn std::error::Error>> 
     let w = TreasuryTestWorkspaceBuilder::default().build().await?;
     let alice = w.sandbox.dev_create_account().await?;
     let limit = NearToken::from_near(10);
-    outcome_check(&w.add_to_whitelist(&w.admin_dao, alice.id(), limit).await?);
+    outcome_check(
+        &w.add_to_whitelist(&w.execution_dao, alice.id(), limit)
+            .await?,
+    );
 
-    // Only the spender can transfer, not the admin or the receiver.
-    for account in [&w.admin_dao, &alice] {
+    // Only the spender can transfer, not the admin, the manager or the receiver.
+    for account in [&w.policy_dao, &w.execution_dao, &alice] {
         let outcome = w
             .transfer(account, alice.id(), NearToken::from_near(1))
             .await?;
@@ -95,7 +100,7 @@ async fn test_transfer_restrictions() -> Result<(), Box<dyn std::error::Error>> 
     // No transfers to non-whitelisted accounts.
     let bob = w.sandbox.dev_create_account().await?;
     let outcome = w
-        .transfer(&w.spender_dao, bob.id(), NearToken::from_near(1))
+        .transfer(&w.payment_dao, bob.id(), NearToken::from_near(1))
         .await?;
     assert!(
         outcome.is_failure(),
@@ -105,12 +110,12 @@ async fn test_transfer_restrictions() -> Result<(), Box<dyn std::error::Error>> 
 
     // No zero transfers, no transfers over the limit.
     let outcome = w
-        .transfer(&w.spender_dao, alice.id(), NearToken::from_yoctonear(0))
+        .transfer(&w.payment_dao, alice.id(), NearToken::from_yoctonear(0))
         .await?;
     assert!(outcome.is_failure(), "Zero transfer should fail");
     let outcome = w
         .transfer(
-            &w.spender_dao,
+            &w.payment_dao,
             alice.id(),
             limit.saturating_add(NearToken::from_yoctonear(1)),
         )
@@ -127,28 +132,34 @@ async fn test_transfer_restrictions() -> Result<(), Box<dyn std::error::Error>> 
 }
 
 #[tokio::test]
-async fn test_admin_management() -> Result<(), Box<dyn std::error::Error>> {
+async fn test_manager_management() -> Result<(), Box<dyn std::error::Error>> {
     let w = TreasuryTestWorkspaceBuilder::default().build().await?;
     let alice = w.sandbox.dev_create_account().await?;
     let limit = NearToken::from_near(10);
 
-    // Only the admin manages the whitelist.
-    for account in [&w.spender_dao, &alice] {
+    // Only the manager manages the whitelist — not the admin, the spender or
+    // the receiver.
+    for account in [&w.policy_dao, &w.payment_dao, &alice] {
         let outcome = w.add_to_whitelist(account, alice.id(), limit).await?;
         assert!(
             outcome.is_failure(),
-            "Whitelisting by non-admin should fail: {:#?}",
+            "Whitelisting by non-manager should fail: {:#?}",
             outcome.outcomes()
         );
     }
 
-    outcome_check(&w.add_to_whitelist(&w.admin_dao, alice.id(), limit).await?);
+    outcome_check(
+        &w.add_to_whitelist(&w.execution_dao, alice.id(), limit)
+            .await?,
+    );
 
     // No duplicates, no whitelisting the treasury itself.
-    let outcome = w.add_to_whitelist(&w.admin_dao, alice.id(), limit).await?;
+    let outcome = w
+        .add_to_whitelist(&w.execution_dao, alice.id(), limit)
+        .await?;
     assert!(outcome.is_failure(), "Duplicate whitelisting should fail");
     let outcome = w
-        .add_to_whitelist(&w.admin_dao, w.treasury.id(), limit)
+        .add_to_whitelist(&w.execution_dao, w.treasury.id(), limit)
         .await?;
     assert!(
         outcome.is_failure(),
@@ -157,11 +168,11 @@ async fn test_admin_management() -> Result<(), Box<dyn std::error::Error>> {
 
     // `set_limit` overrides the remaining allowance.
     outcome_check(
-        &w.transfer(&w.spender_dao, alice.id(), NearToken::from_near(4))
+        &w.transfer(&w.payment_dao, alice.id(), NearToken::from_near(4))
             .await?,
     );
     outcome_check(
-        &w.set_limit(&w.admin_dao, alice.id(), NearToken::from_near(3))
+        &w.set_limit(&w.execution_dao, alice.id(), NearToken::from_near(3))
             .await?,
     );
     assert_eq!(
@@ -170,10 +181,13 @@ async fn test_admin_management() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // Removal revokes the allowance entirely.
-    outcome_check(&w.remove_from_whitelist(&w.admin_dao, alice.id()).await?);
+    outcome_check(
+        &w.remove_from_whitelist(&w.execution_dao, alice.id())
+            .await?,
+    );
     assert!(!w.is_whitelisted(alice.id()).await?);
     let outcome = w
-        .transfer(&w.spender_dao, alice.id(), NearToken::from_near(1))
+        .transfer(&w.payment_dao, alice.id(), NearToken::from_near(1))
         .await?;
     assert!(
         outcome.is_failure(),
@@ -188,27 +202,40 @@ async fn test_role_rotation() -> Result<(), Box<dyn std::error::Error>> {
     let w = TreasuryTestWorkspaceBuilder::default().build().await?;
     let alice = w.sandbox.dev_create_account().await?;
     outcome_check(
-        &w.add_to_whitelist(&w.admin_dao, alice.id(), NearToken::from_near(10))
+        &w.add_to_whitelist(&w.execution_dao, alice.id(), NearToken::from_near(10))
             .await?,
     );
 
     let new_spender = w.sandbox.dev_create_account().await?;
+    let new_manager = w.sandbox.dev_create_account().await?;
     let new_admin = w.sandbox.dev_create_account().await?;
 
-    // Only the admin can rotate roles.
-    let outcome = w
-        .spender_dao
-        .call(w.treasury.id(), "set_spender")
-        .args_json(json!({ "spender_id": new_spender.id() }))
-        .transact()
-        .await?;
-    assert!(
-        outcome.is_failure(),
-        "Role rotation by non-admin should fail"
-    );
+    // Only the admin can rotate roles — the manager and the spender cannot.
+    for (caller, method, args) in [
+        (
+            &w.payment_dao,
+            "set_spender",
+            json!({ "spender_id": new_spender.id() }),
+        ),
+        (
+            &w.execution_dao,
+            "set_manager",
+            json!({ "manager_id": new_manager.id() }),
+        ),
+    ] {
+        let outcome = caller
+            .call(w.treasury.id(), method)
+            .args_json(args)
+            .transact()
+            .await?;
+        assert!(
+            outcome.is_failure(),
+            "Role rotation by non-admin should fail"
+        );
+    }
 
     let outcome = w
-        .admin_dao
+        .policy_dao
         .call(w.treasury.id(), "set_spender")
         .args_json(json!({ "spender_id": new_spender.id() }))
         .transact()
@@ -217,7 +244,7 @@ async fn test_role_rotation() -> Result<(), Box<dyn std::error::Error>> {
 
     // The old spender lost the role, the new one can transfer.
     let outcome = w
-        .transfer(&w.spender_dao, alice.id(), NearToken::from_near(1))
+        .transfer(&w.payment_dao, alice.id(), NearToken::from_near(1))
         .await?;
     assert!(outcome.is_failure(), "The old spender should be rejected");
     outcome_check(
@@ -225,23 +252,45 @@ async fn test_role_rotation() -> Result<(), Box<dyn std::error::Error>> {
             .await?,
     );
 
-    // The admin hands over its own role and loses control.
+    // The manager role rotates the same way.
     let outcome = w
-        .admin_dao
-        .call(w.treasury.id(), "set_admin")
-        .args_json(json!({ "admin_id": new_admin.id() }))
+        .policy_dao
+        .call(w.treasury.id(), "set_manager")
+        .args_json(json!({ "manager_id": new_manager.id() }))
         .transact()
         .await?;
     outcome_check(&outcome);
     let bob = w.sandbox.dev_create_account().await?;
     let outcome = w
-        .add_to_whitelist(&w.admin_dao, bob.id(), NearToken::from_near(1))
+        .add_to_whitelist(&w.execution_dao, bob.id(), NearToken::from_near(1))
         .await?;
-    assert!(outcome.is_failure(), "The old admin should be rejected");
+    assert!(outcome.is_failure(), "The old manager should be rejected");
     outcome_check(
-        &w.add_to_whitelist(&new_admin, bob.id(), NearToken::from_near(1))
+        &w.add_to_whitelist(&new_manager, bob.id(), NearToken::from_near(1))
             .await?,
     );
+
+    // The admin hands over its own role and loses control.
+    let outcome = w
+        .policy_dao
+        .call(w.treasury.id(), "set_admin")
+        .args_json(json!({ "admin_id": new_admin.id() }))
+        .transact()
+        .await?;
+    outcome_check(&outcome);
+    let outcome = w
+        .policy_dao
+        .call(w.treasury.id(), "set_spender")
+        .args_json(json!({ "spender_id": w.payment_dao.id() }))
+        .transact()
+        .await?;
+    assert!(outcome.is_failure(), "The old admin should be rejected");
+    let outcome = new_admin
+        .call(w.treasury.id(), "set_spender")
+        .args_json(json!({ "spender_id": w.payment_dao.id() }))
+        .transact()
+        .await?;
+    outcome_check(&outcome);
 
     Ok(())
 }
@@ -253,11 +302,11 @@ async fn test_failed_transfer_rolls_back_allowance() -> Result<(), Box<dyn std::
     // receipt fails and the refund callback must restore the limit.
     let ghost = AccountId::from_str("ghost.test.near").unwrap();
     let limit = NearToken::from_near(10);
-    outcome_check(&w.add_to_whitelist(&w.admin_dao, &ghost, limit).await?);
+    outcome_check(&w.add_to_whitelist(&w.execution_dao, &ghost, limit).await?);
 
     let treasury_before = w.balance(&w.treasury).await?;
     let outcome = w
-        .transfer(&w.spender_dao, &ghost, NearToken::from_near(4))
+        .transfer(&w.payment_dao, &ghost, NearToken::from_near(4))
         .await?;
     // The transaction itself succeeds (the callback handles the error), but the
     // transfer receipt fails.
@@ -287,18 +336,21 @@ async fn test_limit_does_not_expire() -> Result<(), Box<dyn std::error::Error>> 
     let w = TreasuryTestWorkspaceBuilder::default().build().await?;
     let alice = w.sandbox.dev_create_account().await?;
     let limit = NearToken::from_near(10);
-    outcome_check(&w.add_to_whitelist(&w.admin_dao, alice.id(), limit).await?);
+    outcome_check(
+        &w.add_to_whitelist(&w.execution_dao, alice.id(), limit)
+            .await?,
+    );
 
     // Exhaust the allowance.
-    outcome_check(&w.transfer(&w.spender_dao, alice.id(), limit).await?);
+    outcome_check(&w.transfer(&w.payment_dao, alice.id(), limit).await?);
     let outcome = w
-        .transfer(&w.spender_dao, alice.id(), NearToken::from_yoctonear(1))
+        .transfer(&w.payment_dao, alice.id(), NearToken::from_yoctonear(1))
         .await?;
     assert!(outcome.is_failure(), "The allowance should be exhausted");
 
     // The allowance never resets; only a raised limit extends it.
     outcome_check(
-        &w.set_limit(&w.admin_dao, alice.id(), NearToken::from_near(5))
+        &w.set_limit(&w.execution_dao, alice.id(), NearToken::from_near(5))
             .await?,
     );
     assert_eq!(
@@ -307,7 +359,7 @@ async fn test_limit_does_not_expire() -> Result<(), Box<dyn std::error::Error>> 
     );
 
     outcome_check(
-        &w.transfer(&w.spender_dao, alice.id(), NearToken::from_near(5))
+        &w.transfer(&w.payment_dao, alice.id(), NearToken::from_near(5))
             .await?,
     );
     assert_eq!(
