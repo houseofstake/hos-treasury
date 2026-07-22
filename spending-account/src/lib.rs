@@ -34,14 +34,31 @@ enum StorageKey {
     Whitelist,
 }
 
-/// A whitelist entry with its remaining limit, as returned by view methods.
-/// `token_id: None` is native NEAR (`limit` in yoctoNEAR); `Some` is a NEP-141
-/// token (`limit` in its smallest unit).
+/// A whitelist entry with its (remaining) limit, as returned by view methods
+/// and taken by `add_to_whitelist` / `set_limit`. `token_id: None` is native
+/// NEAR (`limit` in yoctoNEAR); `Some` is a NEP-141 token (`limit` in its
+/// smallest unit).
 #[near(serializers = [json])]
 pub struct WhitelistEntry {
     pub account_id: AccountId,
     pub token_id: Option<AccountId>,
     pub limit: U128,
+}
+
+/// Identifies a whitelist entry in `remove_from_whitelist` arguments.
+#[near(serializers = [json])]
+pub struct WhitelistEntryKey {
+    pub account_id: AccountId,
+    pub token_id: Option<AccountId>,
+}
+
+/// A limit adjustment taken by `increase_limit` / `decrease_limit`, with
+/// `amount` in the token's smallest unit.
+#[near(serializers = [json])]
+pub struct LimitChange {
+    pub account_id: AccountId,
+    pub token_id: Option<AccountId>,
+    pub amount: U128,
 }
 
 #[near(contract_state)]

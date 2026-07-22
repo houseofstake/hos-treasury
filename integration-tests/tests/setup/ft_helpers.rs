@@ -101,9 +101,11 @@ impl TreasuryTestWorkspace {
         Ok(caller
             .call(self.treasury.id(), "add_to_whitelist")
             .args_json(json!({
-                "account_id": account_id,
-                "token_id": token_id,
-                "limit": U128(limit),
+                "entries": [{
+                    "account_id": account_id,
+                    "token_id": token_id,
+                    "limit": U128(limit),
+                }],
             }))
             .transact()
             .await?)
@@ -120,8 +122,10 @@ impl TreasuryTestWorkspace {
         Ok(caller
             .call(self.treasury.id(), "remove_from_whitelist")
             .args_json(json!({
-                "account_id": account_id,
-                "token_id": token_id,
+                "keys": [{
+                    "account_id": account_id,
+                    "token_id": token_id,
+                }],
             }))
             .transact()
             .await?)
@@ -138,9 +142,11 @@ impl TreasuryTestWorkspace {
         Ok(caller
             .call(self.treasury.id(), "set_limit")
             .args_json(json!({
-                "account_id": account_id,
-                "token_id": token_id,
-                "limit": U128(limit),
+                "entries": [{
+                    "account_id": account_id,
+                    "token_id": token_id,
+                    "limit": U128(limit),
+                }],
             }))
             .transact()
             .await?)

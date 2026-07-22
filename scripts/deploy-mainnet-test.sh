@@ -350,12 +350,12 @@ near tokens "$PARENT" send-near "$SWF" "$SWF_FUNDING" \
 # 1-of-1 council).
 say "Whitelisting the SSA in the SWF through the Execution DAO + Execution Timelock"
 dao_action "$EXEC_DAO" "$EXEC_SWF_TL" "$SWF" add_to_whitelist \
-  "{\"account_id\":\"$SSA\",\"token_id\":null,\"limit\":\"$SSA_LIMIT_YOCTO\"}" 0 30
+  "{\"entries\":[{\"account_id\":\"$SSA\",\"token_id\":null,\"limit\":\"$SSA_LIMIT_YOCTO\"}]}" 0 30
 
 if [[ -n "$RECIPIENT" ]]; then
   say "Whitelisting $RECIPIENT in the SSA through the Execution DAO + Execution Timelock"
   dao_action "$EXEC_DAO" "$EXEC_SWF_TL" "$SSA" add_to_whitelist \
-    "{\"account_id\":\"$RECIPIENT\",\"token_id\":null,\"limit\":\"$RECIPIENT_LIMIT_YOCTO\"}" 0 30
+    "{\"entries\":[{\"account_id\":\"$RECIPIENT\",\"token_id\":null,\"limit\":\"$RECIPIENT_LIMIT_YOCTO\"}]}" 0 30
 fi
 
 # ------------------------------------------------------------ verification --

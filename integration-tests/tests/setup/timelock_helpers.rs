@@ -31,9 +31,11 @@ pub fn function_call(
 #[allow(dead_code)]
 pub fn add_to_whitelist_action(account_id: &AccountId, limit: NearToken) -> serde_json::Value {
     json!({
-        "account_id": account_id,
-        "token_id": null,
-        "limit": U128(limit.as_yoctonear()),
+        "entries": [{
+            "account_id": account_id,
+            "token_id": null,
+            "limit": U128(limit.as_yoctonear()),
+        }],
     })
 }
 

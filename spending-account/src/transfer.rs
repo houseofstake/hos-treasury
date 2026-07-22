@@ -210,7 +210,7 @@ mod tests {
         contract.transfer(alice(), NearToken::from_near(100));
         // The allowance is used up; the manager must raise it to allow more.
         testing_env!(context(manager()).build());
-        contract.increase_limit(alice(), None, yocto(50));
+        contract.increase_limit(changes(alice(), None, yocto(50)));
         testing_env!(context(spender()).build());
         contract.transfer(alice(), NearToken::from_near(50));
         assert_eq!(near_remaining(&contract), U128(0));
@@ -244,8 +244,8 @@ mod tests {
         // The account is removed and re-added before the failed transfer's
         // callback lands: the refund is added on top of the fresh limit.
         testing_env!(context(manager()).build());
-        contract.remove_from_whitelist(alice(), None);
-        contract.add_to_whitelist(alice(), None, yocto(100));
+        contract.remove_from_whitelist(keys(alice(), None));
+        contract.add_to_whitelist(entries(alice(), None, yocto(100)));
         testing_env!(context(treasury()).build());
         contract.on_transfer(alice(), NearToken::from_near(60), Err(PromiseError::Failed));
         assert_eq!(near_remaining(&contract), yocto(160));
@@ -257,7 +257,7 @@ mod tests {
         testing_env!(context(spender()).build());
         contract.transfer(alice(), NearToken::from_near(60));
         testing_env!(context(manager()).build());
-        contract.remove_from_whitelist(alice(), None);
+        contract.remove_from_whitelist(keys(alice(), None));
         testing_env!(context(treasury()).build());
         contract.on_transfer(alice(), NearToken::from_near(60), Err(PromiseError::Failed));
         assert!(contract.get_whitelist_entry(alice(), None).is_none());
@@ -312,11 +312,11 @@ mod tests {
     fn test_ft_near_whitelist_does_not_grant_ft() {
         testing_env!(context(manager()).build());
         let mut contract = new_contract();
-        contract.add_to_whitelist(
+        contract.add_to_whitelist(entries(
             alice(),
             None,
             U128(NearToken::from_near(100).as_yoctonear()),
-        );
+        ));
         testing_env!(context(spender()).build());
         contract.transfer_ft(alice(), token(), U128(1));
     }
@@ -336,7 +336,7 @@ mod tests {
         contract.transfer_ft(alice(), token(), U128(FT_LIMIT));
         // The allowance is used up; the manager must raise it to allow more.
         testing_env!(context(manager()).build());
-        contract.increase_limit(alice(), Some(token()), U128(50));
+        contract.increase_limit(changes(alice(), Some(token()), U128(50)));
         testing_env!(context(spender()).build());
         contract.transfer_ft(alice(), token(), U128(50));
         assert_eq!(ft_remaining(&contract), 0);
@@ -370,8 +370,8 @@ mod tests {
         // The pair is removed and re-added before the failed transfer's
         // callback lands: the refund is added on top of the fresh limit.
         testing_env!(context(manager()).build());
-        contract.remove_from_whitelist(alice(), Some(token()));
-        contract.add_to_whitelist(alice(), Some(token()), U128(FT_LIMIT));
+        contract.remove_from_whitelist(keys(alice(), Some(token())));
+        contract.add_to_whitelist(entries(alice(), Some(token()), U128(FT_LIMIT)));
         testing_env!(context(treasury()).build());
         contract.on_transfer_ft(alice(), token(), U128(60), Err(PromiseError::Failed));
         assert_eq!(ft_remaining(&contract), FT_LIMIT + 60);
@@ -383,7 +383,7 @@ mod tests {
         testing_env!(context(spender()).build());
         contract.transfer_ft(alice(), token(), U128(60));
         testing_env!(context(manager()).build());
-        contract.remove_from_whitelist(alice(), Some(token()));
+        contract.remove_from_whitelist(keys(alice(), Some(token())));
         testing_env!(context(treasury()).build());
         contract.on_transfer_ft(alice(), token(), U128(60), Err(PromiseError::Failed));
         assert!(

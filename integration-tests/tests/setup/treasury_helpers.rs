@@ -33,9 +33,11 @@ impl TreasuryTestWorkspace {
         Ok(caller
             .call(self.treasury.id(), "add_to_whitelist")
             .args_json(json!({
-                "account_id": account_id,
-                "token_id": null,
-                "limit": U128(limit.as_yoctonear()),
+                "entries": [{
+                    "account_id": account_id,
+                    "token_id": null,
+                    "limit": U128(limit.as_yoctonear()),
+                }],
             }))
             .transact()
             .await?)
@@ -49,7 +51,7 @@ impl TreasuryTestWorkspace {
     ) -> Result<ExecutionFinalResult, Box<dyn std::error::Error>> {
         Ok(caller
             .call(self.treasury.id(), "remove_from_whitelist")
-            .args_json(json!({ "account_id": account_id, "token_id": null }))
+            .args_json(json!({ "keys": [{ "account_id": account_id, "token_id": null }] }))
             .transact()
             .await?)
     }
@@ -64,9 +66,11 @@ impl TreasuryTestWorkspace {
         Ok(caller
             .call(self.treasury.id(), "set_limit")
             .args_json(json!({
-                "account_id": account_id,
-                "token_id": null,
-                "limit": U128(limit.as_yoctonear()),
+                "entries": [{
+                    "account_id": account_id,
+                    "token_id": null,
+                    "limit": U128(limit.as_yoctonear()),
+                }],
             }))
             .transact()
             .await?)
