@@ -14,7 +14,8 @@ It contains the following contracts:
   capped by a spending limit (token limits are set per recipient-token pair). Control is split between a
   **spender** (can only transfer to whitelisted accounts within their remaining allowance), a **manager** (manages
   the whitelist and limits, but cannot transfer funds) and an **admin** (assigns the roles, nothing else). All
-  roles are expected to be Sputnik DAOs acting through their own `dao-timelock`.
+  roles are expected to be Sputnik DAOs, each either acting through its own `dao-timelock` or holding the role
+  directly.
 
 ## Architecture
 
@@ -25,22 +26,26 @@ The intended deployment wires the contracts together like this:
 - The **Sovereign Wealth Fund** (SWF) and the **Surplus Spending Account** (SSA) are both instances of the
   `spending-account` contract. The SWF holds the main treasury and can only transfer to whitelisted accounts — chiefly
   the SSA, which in turn can only transfer to whitelisted recipients (validators, insurance, etc.).
-- The **Policy Timelock**, the **Execution Timelock** and the **Payment Timelock** are all instances of the
-  `dao-timelock` contract.
+- The **Policy Timelock** and the **Execution Timelock** are both instances of the `dao-timelock` contract.
 - The **Execution DAO** (acting on requests from the SWF Keeper) moves funds from the SWF through the
-  **Execution Timelock**; the **Payment DAO** pays recipients from the SSA through the
-  **Payment Timelock**.
+  **Execution Timelock**.
+- The **Payment DAO** is the spender of the SSA **directly**: payouts from the SSA are not fronted by a timelock,
+  so they settle as soon as the DAO vote passes. Spending from the SSA is bounded instead by its whitelist and the
+  remaining limits, which the Payment DAO cannot touch.
 - The **Execution DAO** is also the manager of both spending accounts: it changes the whitelisted accounts and
   configures the spending limits, acting through the **Execution Timelock**.
 - The **Security Council** — an existing Sputnik DAO — acts through the **Policy Timelock**. It assigns the
   spending accounts' roles, changes the governance accounts of the Execution and Payment DAOs, and changes the
-  guardians and delay of every timelock — including the Policy Timelock itself, which is self-administered, so
+  guardians and delay of both timelocks — including the Policy Timelock itself, which is self-administered, so
   those changes wait out its delay like any other request. The council's own membership (its Sputnik policy) is
   not fronted by a timelock: the council upgrades it directly.
 
-Every fund movement therefore requires: a DAO vote, the timelock delay (during which guardians can cancel), and a
-recipient that is already whitelisted with enough remaining allowance. Raising a limit or whitelisting a new
-recipient goes through the same DAO-vote-plus-delay process via the Execution DAO.
+Moving funds out of the SWF therefore requires: a DAO vote, the Execution Timelock delay (during which guardians
+can cancel), and a recipient that is already whitelisted with enough remaining allowance. Paying out of the SSA
+requires only a Payment DAO vote, but only to a recipient the Execution DAO has already whitelisted and only within
+its remaining allowance — so the timelock delay and the guardian window sit on the whitelist and the limits rather
+than on the individual payout. Raising a limit or whitelisting a new recipient always goes through the
+DAO-vote-plus-delay process via the Execution DAO.
 
 ## Design principles
 
@@ -55,7 +60,7 @@ All contracts are designed to be deployed without access keys, to make sure the 
   - Guardians can only cancel pending requests; they cannot schedule, execute early, or change the configuration.
     Cancelling refunds the escrowed deposits to the funder.
   - Configuration changes (`set_dao`, `set_admin`, `set_guardians`, `set_delay`) are callable only by the configured
-    admin — the Policy Timelock for every timelock, including the Policy Timelock itself — so every change must be
+    admin — the Policy Timelock for both timelocks, including the Policy Timelock itself — so every change must be
     scheduled through a timelock and wait out its delay. The delay is capped at 30 days to protect against a typo
     bricking the DAO forever.
   - Action deposits are escrowed at schedule time: the attached deposit must equal the sum of the action deposits, and

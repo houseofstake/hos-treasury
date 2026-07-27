@@ -2,7 +2,7 @@
 #
 # Deploys the full HoS treasury topology to mainnet:
 #
-#   Security Council ----> Policy Timelock ----- admin of every timelock -----+
+#   Security Council ----> Policy Timelock ----- admin of both timelocks -----+
 #   (existing DAO)         (policy-tl.<parent>)  (its own included), role     |
 #                                                admin of both spending       |
 #                                                accounts, and policy-changer |
@@ -12,14 +12,16 @@
 #   Execution DAO -------> Execution Timelock ------- spender+manager -> SWF (swf.<parent>)
 #                          (exec-swf-tl.<parent>)      manager of the SSA | whitelisted
 #                                                                         v
-#   Payment DAO ---------> Payment Timelock --------- spender --------> SSA (ssa.<parent>)
-#                          (exec-ssa-tl.<parent>)
+#   Payment DAO ------------------------------------ spender --------> SSA (ssa.<parent>)
 #
-# The Execution DAO (through the Execution Timelock) is the manager of
-# both spending accounts: it changes the whitelists and spending limits. The
-# Security Council (through the Policy Timelock) only assigns the roles. The
-# council's own Sputnik policy is NOT fronted by a timelock: the council
-# upgrades it directly.
+# The Payment DAO holds the SSA spender role DIRECTLY: spending from the SSA is
+# NOT fronted by a timelock, so a payout settles as soon as the DAO vote passes.
+# The delay and the guardian window sit on the whitelist and the limits instead:
+# the Execution DAO (through the Execution Timelock) is the manager of both
+# spending accounts and is the only account that can whitelist a recipient or
+# raise a limit. The Security Council (through the Policy Timelock) only assigns
+# the roles. The council's own Sputnik policy is NOT fronted by a timelock: the
+# council upgrades it directly.
 #
 # Modes (identical except where the DAOs come from):
 #   staging     The three DAOs are deployed by this script from
@@ -93,7 +95,6 @@ SWF="swf.$PARENT"
 SSA="ssa.$PARENT"
 POLICY_TL="policy-tl.$PARENT"
 EXEC_SWF_TL="exec-swf-tl.$PARENT"
-EXEC_SSA_TL="exec-ssa-tl.$PARENT"
 if [[ "$MODE" == "staging" ]]; then
   COUNCIL_DAO="council-dao.$PARENT"
   EXEC_DAO="exec-dao.$PARENT"
@@ -278,11 +279,11 @@ Deploying HoS treasury topology as $PARENT on $NETWORK ($MODE mode):
   Payment DAO:             $PAYMENT_DAO
   Policy Timelock:         $POLICY_TL
   Execution Timelock:      $EXEC_SWF_TL
-  Payment Timelock:        $EXEC_SSA_TL
   SWF (spending-account):  $SWF
   SSA (spending-account):  $SSA
   Timelock admin:          $POLICY_TL
   Spending manager:        $EXEC_SWF_TL (whitelists and limits of SWF and SSA)
+  SSA spender:             $PAYMENT_DAO (no timelock — payouts are not delayed)
   Guardians:               $GUARDIANS
   Timelock delay:          $DELAY_NS ns ($(delay_human))
 EOF
@@ -316,11 +317,12 @@ if [[ "$MODE" == "staging" ]]; then
 fi
 
 # ------------------------------------------------------------- timelocks ----
-# The Policy Timelock is the admin of every timelock, its own included: config
+# The Policy Timelock is the admin of both timelocks, its own included: config
 # changes (set_dao, set_admin, set_guardians, set_delay) must be scheduled on
-# the Policy Timelock by the Security Council and wait out its delay.
-say "Deploying the three dao-timelocks (admin: $POLICY_TL, guardians: $GUARDIANS, delay: ${DELAY_NS}ns)"
-for pair in "$POLICY_TL:$COUNCIL_DAO" "$EXEC_SWF_TL:$EXEC_DAO" "$EXEC_SSA_TL:$PAYMENT_DAO"; do
+# the Policy Timelock by the Security Council and wait out its delay. The
+# Payment DAO gets no timelock: it spends from the SSA directly.
+say "Deploying the two dao-timelocks (admin: $POLICY_TL, guardians: $GUARDIANS, delay: ${DELAY_NS}ns)"
+for pair in "$POLICY_TL:$COUNCIL_DAO" "$EXEC_SWF_TL:$EXEC_DAO"; do
   timelock="${pair%%:*}"
   dao="${pair#*:}"
   create_subaccount "$timelock" "$TIMELOCK_BALANCE"
@@ -337,7 +339,7 @@ deploy_contract "$SWF" "$SPENDING_WASM" \
   "{\"admin_id\":\"$POLICY_TL\",\"manager_id\":\"$EXEC_SWF_TL\",\"spender_id\":\"$EXEC_SWF_TL\"}"
 create_subaccount "$SSA" "$SPENDING_BALANCE"
 deploy_contract "$SSA" "$SPENDING_WASM" \
-  "{\"admin_id\":\"$POLICY_TL\",\"manager_id\":\"$EXEC_SWF_TL\",\"spender_id\":\"$EXEC_SSA_TL\"}"
+  "{\"admin_id\":\"$POLICY_TL\",\"manager_id\":\"$EXEC_SWF_TL\",\"spender_id\":\"$PAYMENT_DAO\"}"
 
 say "Funding the SWF treasury with $SWF_FUNDING"
 near tokens "$PARENT" send-near "$SWF" "$SWF_FUNDING" \
@@ -365,7 +367,7 @@ for sa in "$SWF" "$SSA"; do
   echo "$sa manager: $(view_scalar "$sa" get_manager '{}')"
   echo "$sa spender: $(view_scalar "$sa" get_spender '{}')"
 done
-for timelock in "$POLICY_TL" "$EXEC_SWF_TL" "$EXEC_SSA_TL"; do
+for timelock in "$POLICY_TL" "$EXEC_SWF_TL"; do
   echo "$timelock dao:   $(view_scalar "$timelock" get_dao '{}')"
   echo "$timelock admin: $(view_scalar "$timelock" get_admin '{}')"
 done
@@ -386,10 +388,16 @@ view "$POLICY_TL" contract_source_metadata '{}'
 
 say "Done"
 cat <<EOF
-Smoke test — move funds SWF -> SSA through the Execution DAO:
-  1. As $PARENT, add a FunctionCall proposal on $EXEC_DAO calling
-     $EXEC_SWF_TL.schedule with a transfer action on $SWF
-     (receiver_id: $SSA), vote it through, wait 60s, execute.
+Smoke test:
+  1. Move funds SWF -> SSA through the Execution DAO: as $PARENT, add a
+     FunctionCall proposal on $EXEC_DAO calling $EXEC_SWF_TL.schedule with a
+     transfer action on $SWF (receiver_id: $SSA), vote it through, wait 60s,
+     execute.
+  2. Pay out of the SSA as the Payment DAO: add a FunctionCall proposal on
+     $PAYMENT_DAO calling $SSA.transfer directly (receiver_id: a whitelisted
+     recipient) and vote it through. No timelock, no delay — the transfer
+     happens as the vote passes, and fails unless the recipient is already
+     whitelisted with enough remaining limit.
 Cleanup:
   near account delete-account <subaccount> beneficiary $PARENT \\
     network-config $NETWORK $SIGN_WITH send
@@ -400,9 +408,11 @@ Hardening (production):
      can change their policies. On $COUNCIL_DAO the council members keep the
      "policy:*" permissions themselves: the council's self-upgrades are not
      timelocked.
-  2. Fund the SWF with the real treasury balance.
-  3. After verifying everything, remove the full-access keys from
-     $SWF, $SSA, $POLICY_TL, $EXEC_SWF_TL, $EXEC_SSA_TL:
+  2. Verify the SSA whitelist and limits: they are the only bound on what
+     $PAYMENT_DAO can pay out, since its spending is not timelocked.
+  3. Fund the SWF with the real treasury balance.
+  4. After verifying everything, remove the full-access keys from
+     $SWF, $SSA, $POLICY_TL, $EXEC_SWF_TL:
        near account delete-keys <account> public-keys <pk> \\
          network-config $NETWORK $SIGN_WITH send
 EOF

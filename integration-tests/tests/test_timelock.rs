@@ -24,7 +24,7 @@ async fn test_init_and_views() -> Result<(), Box<dyn std::error::Error>> {
         .json()?;
     assert_eq!(&dao, w.policy_dao.id().as_str(), "Invalid DAO");
 
-    for tl in [timelock, w.payment_timelock.as_ref().unwrap()] {
+    for tl in [timelock, w.execution_timelock.as_ref().unwrap()] {
         let admin: String = w
             .sandbox
             .view(tl.id(), "get_admin")
@@ -437,23 +437,23 @@ async fn test_config_change_via_scheduled_request() -> Result<(), Box<dyn std::e
 }
 
 #[tokio::test]
-async fn test_policy_timelock_administers_payment_timelock()
+async fn test_policy_timelock_administers_execution_timelock()
 -> Result<(), Box<dyn std::error::Error>> {
     let w = TreasuryTestWorkspaceBuilder::default()
         .with_timelocks()
         .build()
         .await?;
     let policy_timelock = w.policy_timelock.as_ref().unwrap();
-    let payment_timelock = w.payment_timelock.as_ref().unwrap();
+    let execution_timelock = w.execution_timelock.as_ref().unwrap();
     let new_delay_ns = NS_IN_SECOND;
 
-    // The payment DAO cannot change its own timelock's config, not even via a
-    // scheduled self-call: the payment timelock is not its own admin.
+    // The execution DAO cannot change its own timelock's config, not even via a
+    // scheduled self-call: the execution timelock is not its own admin.
     let outcome = w
         .dao_action(
-            &w.payment_dao,
-            payment_timelock,
-            payment_timelock.id(),
+            &w.execution_dao,
+            execution_timelock,
+            execution_timelock.id(),
             "set_delay",
             json!({ "delay_ns": new_delay_ns.to_string() }),
             NearToken::from_yoctonear(0),
@@ -462,16 +462,16 @@ async fn test_policy_timelock_administers_payment_timelock()
         .await?;
     assert!(
         outcome.is_failure(),
-        "Config change through the spender's own timelock should fail"
+        "Config change through the manager's own timelock should fail"
     );
-    assert_ne!(w.get_delay_ns(payment_timelock).await?, new_delay_ns);
+    assert_ne!(w.get_delay_ns(execution_timelock).await?, new_delay_ns);
 
     // The policy DAO changes it through the policy timelock, which is the admin.
     let outcome = w
         .dao_action(
             &w.policy_dao,
             policy_timelock,
-            payment_timelock.id(),
+            execution_timelock.id(),
             "set_delay",
             json!({ "delay_ns": new_delay_ns.to_string() }),
             NearToken::from_yoctonear(0),
@@ -479,7 +479,7 @@ async fn test_policy_timelock_administers_payment_timelock()
         )
         .await?;
     outcome_check(&outcome);
-    assert_eq!(w.get_delay_ns(payment_timelock).await?, new_delay_ns);
+    assert_eq!(w.get_delay_ns(execution_timelock).await?, new_delay_ns);
 
     Ok(())
 }

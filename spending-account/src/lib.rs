@@ -4,8 +4,8 @@
 //! whitelisted recipients, each capped by a non-expiring spending limit. The
 //! **spender** can only transfer within an entry's remaining allowance; the
 //! **manager** manages the whitelist and limits; the **admin** only assigns
-//! the roles. All three are expected to be Sputnik DAOs acting through their
-//! own `dao-timelock`.
+//! the roles. All three are expected to be Sputnik DAOs, each either acting
+//! through its own `dao-timelock` or holding the role directly.
 //! Failed transfers are rolled back by a callback and do not consume the
 //! allowance. Intentionally NOT upgradable: no method deploys code or migrates
 //! state.
