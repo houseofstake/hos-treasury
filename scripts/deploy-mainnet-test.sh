@@ -10,16 +10,17 @@
 #                                                Payment DAOs                 |
 #                                                                             v
 #   Execution DAO -------> Execution Timelock ------- spender+manager -> SWF (swf.<parent>)
-#                          (exec-swf-tl.<parent>)      manager of the SSA | whitelisted
+#                          (exec-swf-tl.<parent>)                         | whitelisted
 #                                                                         v
-#   Payment DAO ---------> Payment Timelock --------- spender --------> SSA (ssa.<parent>)
+#   Payment DAO ---------> Payment Timelock -------- spender+manager -> SSA (ssa.<parent>)
 #                          (exec-ssa-tl.<parent>)
 #
-# The Execution DAO (through the Execution Timelock) is the manager of
-# both spending accounts: it changes the whitelists and spending limits. The
-# Security Council (through the Policy Timelock) only assigns the roles. The
-# council's own Sputnik policy is NOT fronted by a timelock: the council
-# upgrades it directly.
+# Each spending account is controlled by one DAO through one timelock, which
+# holds both its spender and its manager role: it moves the funds and changes
+# the whitelist and the spending limits of that account. The Security Council
+# (through the Policy Timelock) only assigns the roles. The council's own
+# Sputnik policy is NOT fronted by a timelock: the council upgrades it
+# directly.
 #
 # Modes (identical except where the DAOs come from):
 #   staging     The three DAOs are deployed by this script from
@@ -32,8 +33,9 @@
 #               grant the "policy:*" permissions to the Policy Timelock and
 #               to no one else; the Security Council DAO keeps its policy
 #               self-governed (no timelock). The parent must be able to add
-#               and approve proposals on the Execution DAO for the
-#               whitelisting bootstrap below to work.
+#               and approve proposals on the Execution DAO — and, if
+#               RECIPIENT is set, on the Payment DAO — for the whitelisting
+#               bootstrap below to work.
 #
 # In both modes every created account keeps a full-access key, so the whole
 # deployment can be deleted and its NEAR recovered, and the SSA is
@@ -282,7 +284,9 @@ Deploying HoS treasury topology as $PARENT on $NETWORK ($MODE mode):
   SWF (spending-account):  $SWF
   SSA (spending-account):  $SSA
   Timelock admin:          $POLICY_TL
-  Spending manager:        $EXEC_SWF_TL (whitelists and limits of SWF and SSA)
+  Spending role admin:     $POLICY_TL (both spending accounts)
+  SWF spender + manager:   $EXEC_SWF_TL
+  SSA spender + manager:   $EXEC_SSA_TL
   Guardians:               $GUARDIANS
   Timelock delay:          $DELAY_NS ns ($(delay_human))
 EOF
@@ -329,32 +333,32 @@ for pair in "$POLICY_TL:$COUNCIL_DAO" "$EXEC_SWF_TL:$EXEC_DAO" "$EXEC_SSA_TL:$PA
 done
 
 # ------------------------------------------------------ spending accounts ---
-# The Execution DAO (through its timelock) manages the whitelists and limits
-# of both spending accounts; the Policy Timelock only assigns the roles.
+# Each account's own timelock is both its spender and its manager (transfers,
+# whitelist and limits); the Policy Timelock only assigns the roles.
 say "Deploying the SWF and SSA spending accounts"
 create_subaccount "$SWF" "$SPENDING_BALANCE"
 deploy_contract "$SWF" "$SPENDING_WASM" \
   "{\"admin_id\":\"$POLICY_TL\",\"manager_id\":\"$EXEC_SWF_TL\",\"spender_id\":\"$EXEC_SWF_TL\"}"
 create_subaccount "$SSA" "$SPENDING_BALANCE"
 deploy_contract "$SSA" "$SPENDING_WASM" \
-  "{\"admin_id\":\"$POLICY_TL\",\"manager_id\":\"$EXEC_SWF_TL\",\"spender_id\":\"$EXEC_SSA_TL\"}"
+  "{\"admin_id\":\"$POLICY_TL\",\"manager_id\":\"$EXEC_SSA_TL\",\"spender_id\":\"$EXEC_SSA_TL\"}"
 
 say "Funding the SWF treasury with $SWF_FUNDING"
 near tokens "$PARENT" send-near "$SWF" "$SWF_FUNDING" \
   network-config "$NETWORK" "$SIGN_WITH" send
 
 # -------------------------------------------------------------- bootstrap ---
-# Whitelists and limits are managed by the Execution DAO through the Execution
-# Timelock SWF. The parent drives the governance path itself, so it must be
-# able to add and approve proposals on the Execution DAO (in staging it is the
-# 1-of-1 council).
+# Each whitelist is managed by that account's own DAO through its own timelock:
+# the SWF by the Execution DAO, the SSA by the Payment DAO. The parent drives
+# the governance path itself, so it must be able to add and approve proposals
+# on both DAOs (in staging it is the 1-of-1 council).
 say "Whitelisting the SSA in the SWF through the Execution DAO + Execution Timelock"
 dao_action "$EXEC_DAO" "$EXEC_SWF_TL" "$SWF" add_to_whitelist \
   "{\"entries\":[{\"account_id\":\"$SSA\",\"token_id\":null,\"limit\":\"$SSA_LIMIT_YOCTO\"}]}" 0 30
 
 if [[ -n "$RECIPIENT" ]]; then
-  say "Whitelisting $RECIPIENT in the SSA through the Execution DAO + Execution Timelock"
-  dao_action "$EXEC_DAO" "$EXEC_SWF_TL" "$SSA" add_to_whitelist \
+  say "Whitelisting $RECIPIENT in the SSA through the Payment DAO + Payment Timelock"
+  dao_action "$PAYMENT_DAO" "$EXEC_SSA_TL" "$SSA" add_to_whitelist \
     "{\"entries\":[{\"account_id\":\"$RECIPIENT\",\"token_id\":null,\"limit\":\"$RECIPIENT_LIMIT_YOCTO\"}]}" 0 30
 fi
 
@@ -377,6 +381,9 @@ for dao in "$COUNCIL_DAO" "$EXEC_DAO" "$PAYMENT_DAO"; do
   dao_roles "$dao"
 done
 view "$SWF" get_whitelist_entries '{}'
+if [[ -n "$RECIPIENT" ]]; then
+  view "$SSA" get_whitelist_entries '{}'
+fi
 
 # NEP-330 metadata embedded by the reproducible build: repository + commit
 # that SourceScan uses to verify the deployed code.

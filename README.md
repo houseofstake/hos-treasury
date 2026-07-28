@@ -13,8 +13,8 @@ It contains the following contracts:
 - **spending-account**: A treasury account that pays out NEAR and NEP-141 tokens only to whitelisted recipients, each
   capped by a spending limit (token limits are set per recipient-token pair). Control is split between a
   **spender** (can only transfer to whitelisted accounts within their remaining allowance), a **manager** (manages
-  the whitelist and limits, but cannot transfer funds) and an **admin** (assigns the roles, nothing else). All
-  roles are expected to be Sputnik DAOs acting through their own `dao-timelock`.
+  the whitelist and limits, but cannot transfer funds) and an **admin** (assigns the roles, nothing else). Every
+  role is expected to be held by a Sputnik DAO acting through its own `dao-timelock`.
 
 ## Architecture
 
@@ -27,20 +27,22 @@ The intended deployment wires the contracts together like this:
   the SSA, which in turn can only transfer to whitelisted recipients (validators, insurance, etc.).
 - The **Policy Timelock**, the **Execution Timelock** and the **Payment Timelock** are all instances of the
   `dao-timelock` contract.
-- The **Execution DAO** (acting on requests from the SWF Keeper) moves funds from the SWF through the
-  **Execution Timelock**; the **Payment DAO** pays recipients from the SSA through the
-  **Payment Timelock**.
-- The **Execution DAO** is also the manager of both spending accounts: it changes the whitelisted accounts and
-  configures the spending limits, acting through the **Execution Timelock**.
-- The **Security Council** — an existing Sputnik DAO — acts through the **Policy Timelock**. It assigns the
-  spending accounts' roles, changes the governance accounts of the Execution and Payment DAOs, and changes the
-  guardians and delay of every timelock — including the Policy Timelock itself, which is self-administered, so
-  those changes wait out its delay like any other request. The council's own membership (its Sputnik policy) is
-  not fronted by a timelock: the council upgrades it directly.
+- Each spending account is driven by one DAO through one timelock, which holds both the **spender** and the
+  **manager** role of that account: the **Execution DAO** (acting on requests from the SWF Keeper) moves funds out
+  of the SWF and maintains its whitelisted accounts and spending limits through the **Execution Timelock**; the
+  **Payment DAO** pays recipients out of the SSA and maintains its whitelisted accounts and spending limits through
+  the **Payment Timelock**.
+- The **Security Council** — an existing Sputnik DAO — acts through the **Policy Timelock**. It is the admin of both
+  spending accounts, so it sets their management roles (spender/manager/admin); it changes the governance accounts of
+  the Execution and Payment DAOs; and it changes the guardians and delay of every timelock — including the Policy
+  Timelock itself, which is self-administered, so those changes wait out its delay like any other request. The
+  council's own membership (its Sputnik policy) is not fronted by a timelock: the council upgrades it directly.
 
 Every fund movement therefore requires: a DAO vote, the timelock delay (during which guardians can cancel), and a
 recipient that is already whitelisted with enough remaining allowance. Raising a limit or whitelisting a new
-recipient goes through the same DAO-vote-plus-delay process via the Execution DAO.
+recipient is a request of the same kind on the same DAO, so paying a new recipient costs two votes and two full
+delays. If a DAO misbehaves, the Security Council can reassign the roles of its spending account through the Policy
+Timelock.
 
 ## Design principles
 
@@ -67,7 +69,9 @@ All contracts are designed to be deployed without access keys, to make sure the 
     smallest unit; being whitelisted for NEAR grants no token allowance and vice versa. The recipient must be
     registered with the token contract (NEP-145 storage deposit) — the contract does not pay storage deposits.
   - The manager manages the whitelist and the limits, but cannot transfer funds directly. The admin assigns the
-    spender/manager/admin roles and can do nothing else, so no single role can both whitelist an account and pay it.
+    spender/manager/admin roles and can do nothing else. The three roles are separate accounts as far as the contract
+    is concerned; in the deployment above the spender and the manager of an account are the same timelock, so
+    whitelisting and paying both cost a DAO vote and a full delay, and only the admin can hand either role over.
   - A recipient's limit is its remaining allowance: transfers decrease it and it does not expire or reset. To grant
     a new allowance, the manager raises the recipient's limit.
   - The allowance is consumed before the transfer is sent; if the transfer fails (e.g. the receiver account was
