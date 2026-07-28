@@ -50,13 +50,24 @@ impl Request {
             })
     }
 
-    /// Total gas the request attaches at execution time.
+    /// Total gas the request costs the executor: the gas the actions attach plus the
+    /// runtime's receipt and per-action fees, which come out of the same 300 TGas limit.
     pub(crate) fn total_gas(&self) -> Gas {
-        let actions_gas = self.actions.iter().fold(Gas::from_gas(0), |acc, action| {
-            acc.saturating_add(action.gas)
-        });
+        let num_actions = u64::try_from(self.actions.len()).expect("Action count exceeds u64");
+        let actions_gas = self
+            .actions
+            .iter()
+            .fold(Gas::from_gas(0), |acc, action| {
+                acc.saturating_add(action.gas)
+            })
+            .saturating_add(GAS_PER_ACTION.saturating_mul(num_actions))
+            .saturating_add(GAS_PER_RECEIPT)
+            .saturating_add(GAS_FOR_EXECUTE_BODY);
         match &self.approve {
+            // The approving vote is a second receipt carrying a single action.
             Some(approval) => actions_gas
+                .saturating_add(GAS_PER_RECEIPT)
+                .saturating_add(GAS_PER_ACTION)
                 .saturating_add(GAS_FOR_ON_PROPOSAL_ADDED)
                 .saturating_add(approval.act_proposal_gas),
             None => actions_gas,

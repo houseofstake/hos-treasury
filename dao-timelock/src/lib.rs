@@ -17,8 +17,19 @@ pub const MAX_DELAY_NS: u64 = 30 * 24 * 60 * 60 * 1_000_000_000;
 /// Gas reserved for the `on_proposal_added` callback itself.
 pub const GAS_FOR_ON_PROPOSAL_ADDED: Gas = Gas::from_tgas(10);
 
-/// Upper bound for a request's total gas, checked at schedule time (NEAR caps prepaid gas at 300 TGas).
-pub const MAX_EXECUTION_GAS: Gas = Gas::from_tgas(270);
+/// Runtime fee per function call action (`function_call_cost`: 0.2 TGas send + 0.78 TGas execution).
+/// Charged to the executor on top of the gas the action itself attaches.
+pub const GAS_PER_ACTION: Gas = Gas::from_ggas(980);
+
+/// Runtime fee to create one action receipt (`action_receipt_creation_config`, send + execution).
+pub const GAS_PER_RECEIPT: Gas = Gas::from_ggas(217);
+
+/// Gas `execute` burns in its own body: reading and removing the request, and building the batch.
+pub const GAS_FOR_EXECUTE_BODY: Gas = Gas::from_tgas(5);
+
+/// Upper bound for a request's total gas, checked at schedule time (NEAR caps prepaid gas at
+/// 300 TGas). The 20 TGas margin absorbs a future repricing of the fees above.
+pub const MAX_EXECUTION_GAS: Gas = Gas::from_tgas(280);
 
 #[derive(BorshStorageKey)]
 #[near(serializers = [borsh])]
@@ -498,7 +509,7 @@ mod tests {
             method_name: "do_something".to_string(),
             args: Base64VecU8(b"{}".to_vec()),
             deposit: NearToken::from_yoctonear(0),
-            gas: MAX_EXECUTION_GAS.saturating_add(Gas::from_tgas(1)),
+            gas: MAX_EXECUTION_GAS.saturating_sub(Gas::from_tgas(6)),
         };
         contract.schedule("target.near".parse().unwrap(), vec![action], None);
     }
