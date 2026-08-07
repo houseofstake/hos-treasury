@@ -44,6 +44,10 @@ recipient is a request of the same kind on the same DAO, so paying a new recipie
 delays. If a DAO misbehaves, the Security Council can reassign the roles of its spending account through the Policy
 Timelock.
 
+In production the Policy Timelock is deployed with a delay of `0` and no guardians, so council requests are
+executable immediately. The Execution
+and Payment Timelocks keep a real delay and guardians.
+
 ## Design principles
 
 ### Security
